@@ -1,0 +1,80 @@
+APS SUITE — VERSÃO 3.0
+======================
+
+ORDEM DE USO
+------------
+1. 01_INSTALAR_DEPENDENCIAS.bat   -> instala tudo (suporta uv ou pip)
+2. 02_EXECUTAR_TESTES.bat         -> roda os testes (recomendado)
+3. 03_TESTAR_NO_PYTHON.bat        -> abre a interface sem gerar EXE
+4. 04_GERAR_EXE.bat               -> empacota em dist\Central_APS.exe
+5. 05_ABRIR_EXE.bat               -> abre o EXE gerado
+
+NOVIDADES DA VERSAO 3.0 (10 upgrades)
+--------------------------------------
+
+[1] LOG PERSISTENTE
+    Cada execucao e registrada em APS_log.txt na pasta de saida.
+    Maximo de 500 linhas (rotativo).
+
+[2] BARRA DE PROGRESSO
+    Mostra "X / 7 indicadores" em tempo real durante o processamento.
+
+[3] BOTAO "ABRIR ULTIMO RESULTADO"
+    Habilitado automaticamente apos cada processamento.
+
+[4] VALIDACAO PREVIA DE ARQUIVOS
+    Verifica coluna Nome e conteudo minimo antes de processar.
+    Problemas aparecem em vermelho na lista de arquivos.
+
+[5] TELA DE HISTORICO
+    Lista todos os resultados gerados com data/hora e contagem.
+    Duplo clique para abrir qualquer resultado anterior.
+
+[6] CACHE POR HASH MD5
+    Arquivo nao mudou? Reutiliza o xlsx existente automaticamente.
+    Use --sem-cache na CLI para forcar reprocessamento.
+
+[7] SISTEMA DE PLUGINS
+    Crie novos indicadores (C8, C9...) como arquivos .py em plugins/.
+    Copie c8_exemplo.py, renomeie e ajuste. Zero alteracoes no nucleo.
+
+[8] CLI (LINHA DE COMANDO)
+    python aps_cli.py --indicadores todos
+    python aps_cli.py --indicadores C4 C5 --entrada D:\Brutos
+    python aps_cli.py --historico
+    python aps_cli.py --listar-indicadores
+    Ideal para automacao via Task Scheduler.
+
+[9] EXPORTACAO PDF (opcional - requer: pip install reportlab)
+    Na tela de historico: selecione um resultado > "Exportar PDF"
+    Gera resumo gerencial de 1 pagina pronto para apresentacao.
+
+[10] REPROCESSAMENTO PARCIAL
+    Na tela de historico: selecione um resultado > "Reprocessar pendentes"
+    Reprocessa apenas pacientes ainda em busca ativa com bruto atualizado.
+
+[BONUS] INTERFACE MODERNA (opcional - requer: pip install customtkinter)
+    Em config.toml:
+      [interface]
+      tema_moderno = true
+
+ADICIONAR NOVO INDICADOR (PLUGIN)
+----------------------------------
+1. Copie plugins/c8_exemplo.py para plugins/c8_nome.py
+2. Ajuste CODE, TITULO, CRITERIA e EXTRA_COLUMNS
+3. Reinicie — aparece automaticamente na interface e na CLI
+
+CONFIGURACAO (config.toml)
+--------------------------
+  [caminhos]
+  entrada_padrao = "C:\\Dados\\Brutos"
+  saida_padrao   = "C:\\Dados\\Resultados"
+
+  [interface]
+  tema_moderno = false
+
+  [processamento]
+  ignorar_marcadores = ["resultado", "dashboard", ...]
+
+  [cores]
+  azul_escuro = "1F4E79"

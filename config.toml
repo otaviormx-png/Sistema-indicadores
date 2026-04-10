@@ -1,0 +1,82 @@
+# ============================================================
+# APS Suite — configuração central
+# Edite este arquivo para ajustar comportamento sem mexer no código.
+# ============================================================
+
+[caminhos]
+# Pasta padrão de entrada (onde ficam os arquivos brutos do e-SUS).
+# Use string vazia "" para usar o Desktop do usuário atual.
+entrada_padrao = ""
+
+# Pasta padrão de saída (onde os resultados serão salvos).
+# Use string vazia "" para usar APS_RESULTADOS no Desktop.
+saida_padrao = ""
+
+[processamento]
+# Marcadores que fazem um arquivo ser IGNORADO na listagem de brutos.
+# Arquivos cujo nome contenha qualquer um destes termos serão pulados.
+ignorar_marcadores = [
+    "resultado",
+    "aps_resultados",
+    "busca ativa",
+    "estatisticas",
+    "estatísticas",
+    "resumo",
+    "_interativa",
+    "comparativo",
+    "dashboard",
+]
+
+[interface]
+# Define true para usar CustomTkinter (interface moderna com dark mode).
+# Requer instalação prévia:  pip install customtkinter
+# Ou defina a variável de ambiente APS_TEMA_MODERNO=1
+tema_moderno = false
+azul_escuro    = "1F4E79"
+azul_medio     = "2E75B6"
+azul_claro     = "D6E4F0"
+azul_header    = "BDD7EE"
+verde_ok       = "C6EFCE"
+verde_texto    = "276221"
+verde_escuro   = "375623"
+amarelo        = "FFEB9C"
+amarelo_txt    = "9C5700"
+vermelho       = "FFC7CE"
+vermelho_txt   = "9C0006"
+laranja        = "F4B942"
+laranja_txt    = "843C0C"
+cinza_claro    = "F2F2F2"
+cinza_medio    = "D9D9D9"
+cinza_escuro   = "595959"
+branco         = "FFFFFF"
+preto          = "000000"
+roxo           = "7030A0"
+roxo_claro     = "E8D5F5"
+amarelo_header = "FFE599"
+verde_header   = "E2EFDA"
+azul_clinico   = "C9DAF8"
+
+[cores]
+azul_escuro    = "1F4E79"
+azul_medio     = "2E75B6"
+azul_claro     = "D6E4F0"
+azul_header    = "BDD7EE"
+verde_ok       = "C6EFCE"
+verde_texto    = "276221"
+verde_escuro   = "375623"
+amarelo        = "FFEB9C"
+amarelo_txt    = "9C5700"
+vermelho       = "FFC7CE"
+vermelho_txt   = "9C0006"
+laranja        = "F4B942"
+laranja_txt    = "843C0C"
+cinza_claro    = "F2F2F2"
+cinza_medio    = "D9D9D9"
+cinza_escuro   = "595959"
+branco         = "FFFFFF"
+preto          = "000000"
+roxo           = "7030A0"
+roxo_claro     = "E8D5F5"
+amarelo_header = "FFE599"
+verde_header   = "E2EFDA"
+azul_clinico   = "C9DAF8"
