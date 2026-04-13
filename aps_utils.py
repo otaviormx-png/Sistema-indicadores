@@ -96,6 +96,55 @@ class IndicatorConfig:
     official_like: bool = True
 
 
+INDICATOR_OUTPUT_NAMES: dict[str, str] = {
+    "C1": "Mais acesso",
+    "C2": "Cuidado no desenvolvimento infantil",
+    "C3": "Cuidado na gestação e puerpério",
+    "C4": "Cuidado da pessoa com diabetes",
+    "C5": "Cuidado da pessoa com hipertensão",
+    "C6": "Cuidado da pessoa idosa",
+    "C7": "Cuidado da mulher na prevenção do câncer",
+}
+
+_INDICATOR_CODE_ALIASES: dict[str, tuple[str, ...]] = {
+    "C1": ("mais acesso",),
+    "C2": ("desenvolvimento infantil", "cuidado no desenvolvimento infantil", "infantil"),
+    "C3": ("gestacao", "gesta", "puerperio", "cuidado na gestacao e puerperio"),
+    "C4": ("diabetes", "cuidado da pessoa com diabetes"),
+    "C5": ("hipertensao", "hiperten", "cuidado da pessoa com hipertensao"),
+    "C6": ("idosa", "idoso", "cuidado da pessoa idosa"),
+    "C7": ("mulher", "cancer", "prevencao", "prevencao do cancer", "cuidado da mulher na prevencao do cancer"),
+}
+
+
+def _norm_name_key(txt) -> str:
+    base = normalize_text(txt)
+    base = re.sub(r"[^a-z0-9]+", " ", base).strip()
+    return base
+
+
+def indicator_output_filename(code: str, suffix: str = ".xlsx") -> str:
+    code_up = str(code or "").upper().strip()
+    label = INDICATOR_OUTPUT_NAMES.get(code_up, code_up or "resultado")
+    return f"{label}{suffix}"
+
+
+def infer_indicator_code_from_path(path: str | Path) -> str | None:
+    stem = Path(path).stem
+    m = re.search(r"(C\d+)", stem, flags=re.I)
+    if m:
+        return m.group(1).upper()
+    name_key = _norm_name_key(stem)
+    if not name_key:
+        return None
+    for code, aliases in _INDICATOR_CODE_ALIASES.items():
+        for alias in aliases:
+            alias_key = _norm_name_key(alias)
+            if alias_key and alias_key in name_key:
+                return code
+    return None
+
+
 def fill(hex_color: str) -> PatternFill:
     return PatternFill("solid", start_color=hex_color, end_color=hex_color)
 

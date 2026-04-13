@@ -10,7 +10,7 @@ from typing import Callable
 
 import aps_config
 import aps_plugins
-from aps_utils import candidate_file_for_indicator, normalize_text
+from aps_utils import candidate_file_for_indicator, normalize_text, indicator_output_filename
 
 from c1_mais_acesso import CFG as C1_CFG, processar as processar_c1
 from c2_infantil import CFG as C2_CFG, processar as processar_c2
@@ -113,7 +113,7 @@ def processar_indicador(
     if not entrada:
         return None
     stamp = stamp or datetime.now().strftime("%Y%m%d_%H%M%S")
-    saida = out_dir / f"{cfg.code}_{stamp}.xlsx"
+    saida = out_dir / indicator_output_filename(cfg.code)
     func(entrada, saida)
     return saida
 
@@ -151,7 +151,7 @@ def processar_todos(
             })
             continue
 
-        saida = out_dir / f"{cfg.code}_{stamp}.xlsx"
+        saida = out_dir / indicator_output_filename(cfg.code)
         log(f"Início do processamento: {cfg.code}")
         log(f"  Entrada: {entrada}")
         log(f"  Saída:   {saida}")
@@ -235,7 +235,7 @@ def process_selected(
             except Exception:
                 pass  # falha no cache: processa normalmente
 
-        saida = out_dir / f"{cfg.code}_{stamp}.xlsx"
+        saida = out_dir / indicator_output_filename(cfg.code)
         _log(f"Início do processamento: {cfg.code}")
         _log(f"  Entrada: {entrada}")
         _log(f"  Saída:   {saida}")

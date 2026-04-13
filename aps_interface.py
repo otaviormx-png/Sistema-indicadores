@@ -1,4 +1,4 @@
-
+﻿
 from __future__ import annotations
 
 import os
@@ -6,6 +6,7 @@ import subprocess
 import sys
 import threading
 import traceback
+import unicodedata
 from pathlib import Path
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
@@ -20,11 +21,17 @@ import aps_tema
 aps_tema.init()
 
 
+def _norm_ascii(text: str) -> str:
+    txt = str(text or "").strip().lower()
+    txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
+    return txt
+
+
 def _validate_input_file(path: Path) -> str | None:
-    """Verifica rapidamente se o arquivo parece um bruto válido do e-SUS.
+    """Verifica rapidamente se o arquivo parece um bruto valido do e-SUS.
     Retorna string de erro ou None se ok."""
     if not path.exists():
-        return f"Arquivo não encontrado: {path.name}"
+        return f"Arquivo nao encontrado: {path.name}"
     if path.stat().st_size == 0:
         return f"Arquivo vazio: {path.name}"
     if path.suffix.lower() == ".csv":
@@ -37,11 +44,11 @@ def _validate_input_file(path: Path) -> str | None:
                     continue
             data = [l for l in lines if l.strip()]
             if len(data) < 2:
-                return f"{path.name}: menos de 2 linhas com conteúdo."
+                return f"{path.name}: menos de 2 linhas com conteudo."
             if "nome" not in data[0].lower():
-                return f"{path.name}: coluna 'Nome' não encontrada no cabeçalho."
+                return f"{path.name}: coluna 'Nome' nao encontrada no cabecalho."
         except Exception as exc:
-            return f"{path.name}: erro ao ler — {exc}"
+            return f"{path.name}: erro ao ler - {exc}"
     return None
 
 
@@ -91,11 +98,27 @@ class APSInterface(tk.Tk):
 
         ttk.Label(self, text="APS SUITE - PAINEL PRINCIPAL v4",
                   style="Title.TLabel", anchor="center").pack(fill="x")
-        tk.Label(self, text="VERSÃO VISUAL NOVA • Resumo rápido com cards • Último resultado destacado",
+        tk.Label(self, text="VERSAO VISUAL NOVA - Resumo rapido com cards - Ultimo resultado destacado",
                  bg="#D9EAF7", fg="#1F4E79", font=("Segoe UI", 10, "bold"), pady=6).pack(fill="x")
 
-        main = ttk.Frame(self)
-        main.pack(fill="both", expand=True, padx=12, pady=12)
+        body = ttk.Frame(self)
+        body.pack(fill="both", expand=True, padx=12, pady=12)
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+
+        self._main_canvas = tk.Canvas(body, bg="#EAF2F8", highlightthickness=0)
+        self._main_canvas.grid(row=0, column=0, sticky="nsew")
+        vscroll = ttk.Scrollbar(body, orient="vertical", command=self._main_canvas.yview)
+        vscroll.grid(row=0, column=1, sticky="ns")
+        self._main_canvas.configure(yscrollcommand=vscroll.set)
+
+        main = ttk.Frame(self._main_canvas)
+        self._main_canvas_window = self._main_canvas.create_window((0, 0), window=main, anchor="nw")
+        main.bind("<Configure>", lambda _e: self._main_canvas.configure(scrollregion=self._main_canvas.bbox("all")))
+        self._main_canvas.bind("<Configure>", lambda e: self._main_canvas.itemconfigure(self._main_canvas_window, width=e.width))
+        self._main_canvas.bind("<Enter>", lambda _e: self.bind_all("<MouseWheel>", self._on_main_mousewheel))
+        self._main_canvas.bind("<Leave>", lambda _e: self.unbind_all("<MouseWheel>"))
+
         main.columnconfigure(0, weight=0)
         main.columnconfigure(1, weight=1)
         main.rowconfigure(0, weight=1)
@@ -110,17 +133,24 @@ class APSInterface(tk.Tk):
         self._build_left_panel(left)
         self._build_right_panel(right)
 
+    def _on_main_mousewheel(self, event):
+        try:
+            delta = int(-1 * (event.delta / 120))
+        except Exception:
+            delta = -1
+        self._main_canvas.yview_scroll(delta, "units")
+
     def _build_left_panel(self, parent):
         # Pastas
         box_paths = ttk.LabelFrame(parent, text="Pastas", style="Section.TLabelframe")
         box_paths.pack(fill="x", pady=(0, 10))
-        ttk.Label(box_paths, text="Entrada (onde estão os brutos):").grid(
+        ttk.Label(box_paths, text="Entrada (onde estao os brutos):").grid(
             row=0, column=0, sticky="w", padx=10, pady=(10, 4))
         ttk.Entry(box_paths, textvariable=self.input_dir, width=42).grid(
             row=1, column=0, padx=10, pady=(0, 8))
         ttk.Button(box_paths, text="Escolher", command=self._choose_input).grid(
             row=1, column=1, padx=8, pady=(0, 8))
-        ttk.Label(box_paths, text="Saída (onde salvar resultados):").grid(
+        ttk.Label(box_paths, text="Saida (onde salvar resultados):").grid(
             row=2, column=0, sticky="w", padx=10, pady=(2, 4))
         ttk.Entry(box_paths, textvariable=self.output_dir, width=42).grid(
             row=3, column=0, padx=10, pady=(0, 10))
@@ -144,8 +174,8 @@ class APSInterface(tk.Tk):
                                                sticky="w", padx=12, pady=2)
         self.quick_selected_var.set(str(sum(1 for v in self.indicator_vars.values() if v.get())))
 
-        # Ações
-        box_actions = ttk.LabelFrame(parent, text="Ações", style="Section.TLabelframe")
+        # Acoes
+        box_actions = ttk.LabelFrame(parent, text="Acoes", style="Section.TLabelframe")
         box_actions.pack(fill="x", pady=(0, 10))
         for text, cmd in [
             ("Atualizar arquivos",         self._refresh_input_files),
@@ -153,19 +183,11 @@ class APSInterface(tk.Tk):
             ("Abrir pasta de resultados",  self._open_output),
             ("Abrir dashboard",            self._open_dashboard),
             ("Abrir editor da planilha APS", self._open_editor_planilha),
-            ("Cruzar pacientes por lista", self._open_comparador_paciente),
-            ("Ver histórico de execuções", self._open_historico),
+            ("Ver historico de execucoes", self._open_historico),
         ]:
             ttk.Button(box_actions, text=text, command=cmd,
                        style="Primary.TButton").pack(fill="x", padx=10, pady=5)
-
-        self._btn_open_last = ttk.Button(
-            box_actions, text="Abrir último resultado gerado",
-            command=self._open_last_result,
-            style="Accent.TButton", state="disabled")
-        self._btn_open_last.pack(fill="x", padx=10, pady=5)
-
-        # Resumo rápido
+        # Resumo rapido
         box_status = ttk.LabelFrame(parent, text="Painel executivo", style="Section.TLabelframe")
         box_status.pack(fill="both", expand=True)
 
@@ -178,7 +200,7 @@ class APSInterface(tk.Tk):
         self._make_summary_card(cards, "Gerados OK", self.quick_ok_var, 1, 0)
         self._make_summary_card(cards, "Erros", self.quick_error_var, 1, 1)
 
-        ttk.Label(box_status, text="Último resultado:", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(6, 0))
+        ttk.Label(box_status, text="Ultimo resultado:", font=("Segoe UI", 9, "bold")).pack(anchor="w", padx=10, pady=(6, 0))
         ttk.Label(box_status, textvariable=self.quick_last_var, wraplength=280, justify="left").pack(fill="x", padx=10)
 
         ttk.Separator(box_status, orient="horizontal").pack(fill="x", padx=10, pady=8)
@@ -198,7 +220,7 @@ class APSInterface(tk.Tk):
         self.tree_files.heading("arquivo", text="Arquivo")
         self.tree_files.heading("ext", text="Ext.")
         self.tree_files.heading("mb", text="MB")
-        self.tree_files.heading("validacao", text="Validação")
+        self.tree_files.heading("validacao", text="Validacao")
         self.tree_files.column("arquivo", width=380)
         self.tree_files.column("ext", width=55, anchor="center")
         self.tree_files.column("mb", width=65, anchor="e")
@@ -221,7 +243,7 @@ class APSInterface(tk.Tk):
         self._progressbar.grid(row=1, column=0, sticky="ew", padx=10, pady=(0, 8))
 
         # Log
-        box_log = ttk.LabelFrame(parent, text="Log de execução", style="Section.TLabelframe")
+        box_log = ttk.LabelFrame(parent, text="Log de execucao", style="Section.TLabelframe")
         box_log.grid(row=2, column=0, sticky="nsew")
         box_log.rowconfigure(0, weight=1)
         box_log.columnconfigure(0, weight=1)
@@ -263,7 +285,7 @@ class APSInterface(tk.Tk):
 
     def _choose_output(self):
         d = filedialog.askdirectory(initialdir=self.output_dir.get() or str(OUT_DIR),
-                                    title="Escolha a pasta de saída")
+                                    title="Escolha a pasta de saida")
         if d:
             self.output_dir.set(d)
 
@@ -273,7 +295,7 @@ class APSInterface(tk.Tk):
         try:
             files = desktop_files(Path(self.input_dir.get()))
         except Exception as exc:
-            messagebox.showerror("Erro", f"Não foi possível listar os arquivos.\n\n{exc}")
+            messagebox.showerror("Erro", f"Nao foi possivel listar os arquivos.\n\n{exc}")
             return
         for f in sorted(files, key=lambda x: x.name.lower()):
             size_mb = f.stat().st_size / (1024 * 1024)
@@ -285,7 +307,7 @@ class APSInterface(tk.Tk):
                                    tags=(tag,))
         self.summary_var.set(
             f"Arquivos brutos detectados: {len(files)}\n"
-            f"Entrada: {self.input_dir.get()}\nSaída: {self.output_dir.get()}")
+            f"Entrada: {self.input_dir.get()}\nSaida: {self.output_dir.get()}")
         self.status_var.set("Lista de arquivos atualizada.")
 
     def _open_output(self):
@@ -294,16 +316,16 @@ class APSInterface(tk.Tk):
         try:
             os.startfile(path)
         except Exception:
-            messagebox.showinfo("Pasta de saída", str(path))
+            messagebox.showinfo("Pasta de saida", str(path))
 
     def _open_last_result(self):
         if self._last_result_path and self._last_result_path.exists():
             try:
                 os.startfile(self._last_result_path)
             except Exception:
-                messagebox.showinfo("Último resultado", str(self._last_result_path))
+                messagebox.showinfo("Ultimo resultado", str(self._last_result_path))
         else:
-            messagebox.showinfo("Último resultado", "Nenhum resultado gerado nesta sessão.")
+            messagebox.showinfo("Ultimo resultado", "Nenhum resultado gerado nesta sessao.")
 
     def _open_dashboard(self):
         try:
@@ -351,7 +373,7 @@ class APSInterface(tk.Tk):
             if win:
                 win.lift(); win.focus_force()
         except Exception as exc:
-            messagebox.showerror("Erro ao abrir histórico", str(exc))
+            messagebox.showerror("Erro ao abrir historico", str(exc))
 
     def _append_log(self, msg: str):
         self.txt_log.insert("end", msg + "\n")
@@ -369,7 +391,7 @@ class APSInterface(tk.Tk):
         try:
             files = desktop_files(Path(self.input_dir.get()))
         except Exception as exc:
-            messagebox.showerror("Erro", f"Não foi possível listar arquivos.\n\n{exc}")
+            messagebox.showerror("Erro", f"Nao foi possivel listar arquivos.\n\n{exc}")
             return
         if not files:
             messagebox.showerror("Sem arquivos",
@@ -381,9 +403,9 @@ class APSInterface(tk.Tk):
         erros_val = [e for e in erros_val if e]
         if erros_val:
             msg = "Alguns arquivos apresentaram problemas:\n\n" + \
-                  "\n".join(f"  • {e}" for e in erros_val) + \
+                  "\n".join(f"  - {e}" for e in erros_val) + \
                   "\n\nDeseja continuar mesmo assim?"
-            if not messagebox.askyesno("Atenção — arquivos com problemas", msg):
+            if not messagebox.askyesno("Atencao - arquivos com problemas", msg):
                 return
 
         total = len(selecionados)
@@ -393,7 +415,7 @@ class APSInterface(tk.Tk):
         self._prog_label.config(text=f"0 / {total} indicadores")
         self.processing = True
         self.status_var.set("Processando...")
-        self._append_log("Início do processamento...")
+        self._append_log("Inicio do processamento...")
 
         out_dir = Path(self.output_dir.get())
         aps_log.log_session_start(out_dir, selecionados)
@@ -402,7 +424,8 @@ class APSInterface(tk.Tk):
 
         def _log_wrap(msg: str):
             self.after(0, lambda m=msg: self._append_log(m))
-            if any(tok in msg for tok in ("✔ Concluído", "✘ Erro", "não encontrado")):
+            msg_norm = _norm_ascii(msg)
+            if ("concluido" in msg_norm) or ("erro" in msg_norm) or ("nao encontrado" in msg_norm):
                 processed[0] += 1
                 n = processed[0]
                 self.after(0, lambda c=n: (
@@ -432,44 +455,43 @@ class APSInterface(tk.Tk):
         self.processing = False
         ok = [r for r in results if r.get("status") == "ok"]
         erros = [r for r in results if r.get("status") == "erro"]
-        nao_enc = [r for r in results if r.get("status") == "não encontrado"]
+        nao_enc = [r for r in results if "nao encontrado" in _norm_ascii(r.get("status", ""))]
 
         self._progressbar["value"] = self._progressbar["maximum"]
-        self._prog_label.config(text=f"{len(results)} / {len(results)} — concluído")
+        self._prog_label.config(text=f"{len(results)} / {len(results)} - concluido")
 
         ultimo_ok = next((r for r in reversed(ok) if r.get("saida")), None)
         if ultimo_ok:
             self._last_result_path = Path(ultimo_ok["saida"])
-            self._btn_open_last.config(state="normal")
             self.quick_last_var.set(self._last_result_path.name)
 
         self.quick_ok_var.set(str(len(ok)))
         self.quick_error_var.set(str(len(erros)))
         self.summary_var.set(
-            f"Último processamento:\n"
-            f"✔ Gerados OK: {len(ok)}\n"
-            f"✘ Erros: {len(erros)}\n"
-            f"⚠ Não encontrados: {len(nao_enc)}\n"
-            f"Pasta de saída: {self.output_dir.get()}\n"
-            f"Último resultado: {self._last_result_path.name if self._last_result_path else 'Nenhum'}")
+            f"Ultimo processamento:\n"
+            f"Gerados OK: {len(ok)}\n"
+            f"Erros: {len(erros)}\n"
+            f"Nao encontrados: {len(nao_enc)}\n"
+            f"Pasta de saida: {self.output_dir.get()}\n"
+            f"Ultimo resultado: {self._last_result_path.name if self._last_result_path else 'Nenhum'}")
 
         self.status_var.set(
-            f"Concluído — ✔ {len(ok)} gerado(s)  ✘ {len(erros)} erro(s)  "
-            f"⚠ {len(nao_enc)} não encontrado(s)")
+            f"Concluido - OK {len(ok)} gerado(s)  ERRO {len(erros)} erro(s)  "
+            f"ALERTA {len(nao_enc)} nao encontrado(s)")
         self._append_log("=" * 60)
-        self._append_log(f"RESUMO: {len(ok)} OK | {len(erros)} ERRO | {len(nao_enc)} NÃO ENCONTRADO")
+        self._append_log(f"RESUMO: {len(ok)} OK | {len(erros)} ERRO | {len(nao_enc)} NAO ENCONTRADO")
 
         if erros:
             self._append_log("\nINDICADORES COM ERRO:")
             for r in erros:
                 self._append_log(f"  {r['code']}: {(r.get('erro') or '').splitlines()[0]}")
-            messagebox.showwarning("Concluído com erros",
+            messagebox.showwarning("Concluido com erros",
                                    f"Processamento com {len(erros)} erro(s).\n"
                                    f"Gerados OK: {len(ok)}\n"
                                    f"Com erro: {', '.join(r['code'] for r in erros)}\n"
-                                   f"Não encontrados: {len(nao_enc)}")
+                                   f"Nao encontrados: {len(nao_enc)}")
         else:
-            messagebox.showinfo("Concluído",
+            messagebox.showinfo("Concluido",
                                 f"Processamento finalizado.\nArquivos gerados: {len(ok)}")
 
     def _finish_error(self, exc, tb):
@@ -488,3 +510,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

@@ -1,0 +1,14 @@
+﻿APS LITE ISOLADO
+
+Conteudo:
+- APS_Dashboard_Lite.exe
+- APS_Editor_Lite.exe
+
+Como usar em outro computador:
+1) Copie a pasta dist inteira (ou o ZIP pronto).
+2) Execute os EXEs diretamente.
+3) Nao precisa instalar Python.
+
+Observacoes:
+- O Windows pode pedir confirmacao no primeiro uso.
+- Se o antivírus bloquear, adicionar excecao para os EXEs.
