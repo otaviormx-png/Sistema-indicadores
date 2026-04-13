@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "aps-suite"
+version = "2.0.0"
+description = "Sistema de processamento de indicadores da Atenção Primária à Saúde (C1–C7)"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "pandas>=2.0",
+    "openpyxl>=3.1",
+    "matplotlib>=3.7",
+    "pillow>=10.0",
+    "tomli>=2.0; python_version < '3.11'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+exe = [
+    "pyinstaller>=6.0",
+]
+pdf = [
+    "reportlab>=4.0",
+]
+modern-ui = [
+    "customtkinter>=5.2",
+]
+all = [
+    "reportlab>=4.0",
+    "customtkinter>=5.2",
+]
+
+[project.scripts]
+aps     = "aps_interface:main"
+aps-cli = "aps_cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["."]
+
+# ------------------------------------------------------------------
+# Pytest
+# ------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+# ------------------------------------------------------------------
+# Geração do EXE (execute: uv run pyinstaller Central_APS.spec)
+# ------------------------------------------------------------------
+# O arquivo Central_APS.spec já está no projeto e pode ser usado
+# diretamente com PyInstaller.
