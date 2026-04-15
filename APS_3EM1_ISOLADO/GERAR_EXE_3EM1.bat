@@ -9,7 +9,19 @@ if errorlevel 1 (
 )
 
 echo Gerando EXE unico APS_LITE_3em1...
-pyinstaller --noconfirm --onefile --windowed --name APS_LITE_3em1 --icon APS_Suite.ico aps_lite_3em1.py
+pyinstaller ^
+  --noconfirm ^
+  --clean ^
+  --onefile ^
+  --windowed ^
+  --name APS_LITE_3em1 ^
+  --icon APS_Suite.ico ^
+  --hidden-import aps_config ^
+  --hidden-import aps_utils ^
+  --hidden-import aps_clonador_interativo ^
+  --hidden-import aps_dashboard ^
+  --hidden-import aps_aprazamento ^
+  aps_lite_3em1.py
 
 if not exist dist\APS_LITE_3em1.exe (
   echo Falha ao gerar EXE.

@@ -13,7 +13,39 @@ from openpyxl import Workbook, load_workbook
 from openpyxl.styles import PatternFill, Font, Border, Side, Alignment
 from openpyxl.utils import get_column_letter
 
-import aps_config
+try:
+    import aps_config
+except Exception:
+    class _ApsConfigFallback:
+        @staticmethod
+        def cores() -> dict:
+            return {
+                "azul_escuro": "1F4E79",
+                "azul_medio": "2E75B6",
+                "azul_claro": "D6E4F0",
+                "azul_header": "BDD7EE",
+                "verde_ok": "C6EFCE",
+                "verde_texto": "276221",
+                "verde_escuro": "375623",
+                "amarelo": "FFEB9C",
+                "amarelo_txt": "9C5700",
+                "vermelho": "FFC7CE",
+                "vermelho_txt": "9C0006",
+                "laranja": "F4B942",
+                "laranja_txt": "843C0C",
+                "cinza_claro": "F2F2F2",
+                "cinza_medio": "D9D9D9",
+                "cinza_escuro": "595959",
+                "branco": "FFFFFF",
+                "preto": "000000",
+                "roxo": "7030A0",
+                "roxo_claro": "E8D5F5",
+                "amarelo_header": "FFE599",
+                "verde_header": "E2EFDA",
+                "azul_clinico": "C9DAF8",
+            }
+
+    aps_config = _ApsConfigFallback()
 
 ENCODINGS = ["utf-8-sig", "utf-8", "latin1", "cp1252"]
 CSV_SEPARATORS = [";", ",", "\t"]

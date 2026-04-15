@@ -8,27 +8,31 @@ from tkinter import messagebox
 
 
 def _run_editor() -> None:
-    from aps_editor_lite import EditorLiteApp
-
-    app = EditorLiteApp()
-    app.mainloop()
-
-
-def _run_dashboard() -> None:
-    from aps_dashboard_lite import DashboardLiteApp
-
-    app = DashboardLiteApp()
-    app.mainloop()
-
-
-def _run_aprazador() -> None:
-    from aps_aprazamento import AprazamentoApp
+    from aps_clonador_interativo import launch_editor
 
     root = tk.Tk()
     root.withdraw()
-    win = AprazamentoApp(master=root)
+    win = launch_editor(master=root)
+    if win is None:
+        root.destroy()
+        return
     win.protocol("WM_DELETE_WINDOW", root.destroy)
     root.mainloop()
+
+
+def _run_dashboard() -> None:
+    from aps_dashboard import launch_dashboard
+
+    root = tk.Tk()
+    root.withdraw()
+    launch_dashboard()
+    root.mainloop()
+
+
+def _run_aprazador() -> None:
+    from aps_aprazamento import main as run_aprazamento_main
+
+    run_aprazamento_main()
 
 
 def _spawn_tool(tool: str) -> None:
@@ -62,7 +66,7 @@ def _dispatch_tool(tool: str) -> int:
 class APSLiteHub(tk.Tk):
     def __init__(self):
         super().__init__()
-        self.title("APS LITE 3 em 1")
+        self.title("APS 3 em 1")
         self.geometry("720x400")
         self.configure(bg="#EEF4F8")
         self.resizable(False, False)
@@ -80,7 +84,7 @@ class APSLiteHub(tk.Tk):
 
         tk.Label(
             title_wrap,
-            text="APS LITE 3 EM 1",
+            text="APS 3 EM 1",
             bg="#1F4E79",
             fg="white",
             font=("Segoe UI", 16, "bold"),
@@ -89,7 +93,7 @@ class APSLiteHub(tk.Tk):
 
         tk.Label(
             self,
-            text="Escolha o modulo para abrir:\nDashboard Lite, Editor Lite ou Aprazador Completo.",
+            text="Escolha o modulo para abrir:\nDashboard Completo, Editor Completo ou Aprazador Completo.",
             bg="#EEF4F8",
             fg="#1F4E79",
             font=("Segoe UI", 11),
@@ -105,16 +109,16 @@ class APSLiteHub(tk.Tk):
         self._module_card(
             cards,
             0,
-            "Dashboard Lite",
-            "Analise e filtros rapidos\ncom carga por pasta/arquivos.",
+            "Dashboard Completo",
+            "Painel completo com comparacoes,\ngraficos e exportacoes.",
             "#DCEAF5",
             "dashboard",
         )
         self._module_card(
             cards,
             1,
-            "Editor Lite",
-            "Edicao operacional das\nplanilhas com salvar direto.",
+            "Editor Completo",
+            "Abre direto no editor completo\n(sem tela de gerador/clonador).",
             "#FFF4E5",
             "editor",
         )
