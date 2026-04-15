@@ -9,10 +9,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox, simpledialog, ttk
 
-from openpyxl import load_workbook
+from openpyxl import Workbook, load_workbook
 
 
 STORE_FILENAME = "aprazamento_controle.json"
+STORE_XLSX_FILENAME = "aprazamento_controle.xlsx"
 CODES = ("C1", "C2", "C3", "C4", "C5", "C6", "C7")
 DEFAULT_INTERVAL_MONTHS = 4
 DEFAULT_INTERVAL_DAYS = 0
@@ -41,6 +42,46 @@ CODE_ALIASES: dict[str, tuple[str, ...]] = {
     "C6": ("idosa", "idoso"),
     "C7": ("mulher", "cancer"),
 }
+
+MONTH_NAMES = (
+    "JANEIRO",
+    "FEVEREIRO",
+    "MARÇO",
+    "ABRIL",
+    "MAIO",
+    "JUNHO",
+    "JULHO",
+    "AGOSTO",
+    "SETEMBRO",
+    "OUTUBRO",
+    "NOVEMBRO",
+    "DEZEMBRO",
+)
+
+RECORD_EXPORT_COLUMNS = [
+    "id",
+    "name",
+    "cpf",
+    "cns",
+    "phone",
+    "conditions",
+    "last_medico_date",
+    "last_enfermagem_date",
+    "last_antropometria_date",
+    "last_sinais_vitais_date",
+    "estimated_medico",
+    "estimated_enfermagem",
+    "base_mode",
+    "interval_months",
+    "interval_days",
+    "manual_next_date",
+    "notes",
+    "base_date",
+    "base_source",
+    "next_date",
+    "days_to_due",
+    "semaphore",
+]
 
 
 def _norm(text) -> str:
@@ -390,6 +431,18 @@ def _code_in_name(stem: str, code: str) -> bool:
     return re.search(rf"(?<![0-9a-z]){code.lower()}(?![0-9])", stem.lower()) is not None
 
 
+def detect_indicator_code_from_path(path: Path) -> str | None:
+    stem = path.stem
+    stem_n = _norm(stem)
+    for code in CODES:
+        if _code_in_name(stem, code):
+            return code
+        alias_tokens = CODE_ALIASES.get(code, ())
+        if any(_norm(token) in stem_n for token in alias_tokens):
+            return code
+    return None
+
+
 def find_latest_indicator_files(folder: Path) -> dict[str, Path]:
     files = [p for p in folder.iterdir() if p.is_file() and p.suffix.lower() in {".xlsx", ".xls"} and not p.name.startswith("~$")]
     result: dict[str, Path] = {}
@@ -410,8 +463,8 @@ def find_latest_indicator_files(folder: Path) -> dict[str, Path]:
     return result
 
 
-def build_records_from_folder(
-    folder: Path,
+def build_records_from_indicator_files(
+    files: dict[str, Path],
     existing_records: dict[str, dict] | None = None,
     ref_date: date | None = None,
     default_base_mode: str = "ENFERMAGEM",
@@ -420,7 +473,6 @@ def build_records_from_folder(
 ) -> tuple[dict[str, dict], dict[str, str]]:
     ref = ref_date or date.today()
     existing_records = existing_records or {}
-    files = find_latest_indicator_files(folder)
     if "C1" not in files:
         raise FileNotFoundError("Nao foi encontrada planilha C1 na pasta selecionada.")
 
@@ -488,6 +540,167 @@ def build_records_from_folder(
     return records, used
 
 
+def build_records_from_folder(
+    folder: Path,
+    existing_records: dict[str, dict] | None = None,
+    ref_date: date | None = None,
+    default_base_mode: str = "ENFERMAGEM",
+    default_interval_months: int = DEFAULT_INTERVAL_MONTHS,
+    default_interval_days: int = DEFAULT_INTERVAL_DAYS,
+) -> tuple[dict[str, dict], dict[str, str]]:
+    files = find_latest_indicator_files(folder)
+    return build_records_from_indicator_files(
+        files,
+        existing_records=existing_records,
+        ref_date=ref_date,
+        default_base_mode=default_base_mode,
+        default_interval_months=default_interval_months,
+        default_interval_days=default_interval_days,
+    )
+
+
+def _sorted_patients(records: dict[str, dict]) -> list[dict]:
+    return sorted(
+        records.values(),
+        key=lambda r: (
+            _priority_order(str(r.get("semaphore", ""))),
+            int(r.get("days_to_due") if str(r.get("days_to_due", "")).strip() not in {"", "None"} else 999999),
+            _norm_spaces(r.get("name", "")),
+        ),
+    )
+
+
+def _parse_bool(value) -> bool:
+    txt = str(value or "").strip().lower()
+    return txt in {"1", "true", "sim", "yes", "y"}
+
+
+def _parse_int(value, default: int = 0) -> int:
+    txt = str(value or "").strip()
+    if txt in {"", "-", "None", "nan"}:
+        return default
+    try:
+        return int(float(txt))
+    except Exception:
+        return default
+
+
+def save_store_excel(
+    path: Path,
+    records: dict[str, dict],
+    source_files: dict[str, str] | None = None,
+    settings: dict | None = None,
+) -> None:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Dados_Aprazamento"
+    ws.append(RECORD_EXPORT_COLUMNS)
+    for rec in _sorted_patients(records):
+        row = []
+        for col in RECORD_EXPORT_COLUMNS:
+            value = rec.get(col, "")
+            if col == "conditions":
+                if isinstance(value, list):
+                    value = "|".join(str(x).strip() for x in value if str(x).strip())
+                else:
+                    value = str(value or "").strip()
+            elif col in {"estimated_medico", "estimated_enfermagem"}:
+                value = 1 if bool(value) else 0
+            row.append(value)
+        ws.append(row)
+    ws.freeze_panes = "A2"
+
+    meta_ws = wb.create_sheet("Meta")
+    meta_ws.append(["chave", "valor"])
+    meta_ws.append(["updated_at", datetime.now().isoformat(timespec="seconds")])
+    meta_ws.append(["source_files", json.dumps(source_files or {}, ensure_ascii=False)])
+    meta_ws.append(["settings", json.dumps(settings or {}, ensure_ascii=False)])
+    wb.save(path)
+
+
+def load_store_excel_with_meta(path: Path) -> tuple[dict[str, dict], dict]:
+    if not path.exists():
+        return {}, {}
+    wb = load_workbook(path, read_only=True, data_only=True)
+    try:
+        ws = wb["Dados_Aprazamento"] if "Dados_Aprazamento" in wb.sheetnames else wb[wb.sheetnames[0]]
+        rows = ws.iter_rows(min_row=1, max_row=1, values_only=True)
+        header_row = next(rows, None)
+        if not header_row:
+            return {}, {}
+        header = [str(x or "").strip() for x in header_row]
+        col_map = {name: idx for idx, name in enumerate(header) if name}
+
+        def _row_val(row_vals, col_name: str):
+            idx = col_map.get(col_name)
+            if idx is None or idx >= len(row_vals):
+                return ""
+            return row_vals[idx]
+
+        out: dict[str, dict] = {}
+        for row_vals in ws.iter_rows(min_row=2, values_only=True):
+            name = str(_row_val(row_vals, "name") or "").strip()
+            cpf = _clean_id(_row_val(row_vals, "cpf"))
+            cns = _clean_id(_row_val(row_vals, "cns"))
+            rid = str(_row_val(row_vals, "id") or "").strip()
+            if not rid and name:
+                rid = patient_key(name, cpf, cns)
+            if not rid:
+                continue
+
+            conditions_raw = str(_row_val(row_vals, "conditions") or "").strip()
+            conditions = [x.strip() for x in conditions_raw.replace(",", "|").split("|") if x.strip()]
+            rec = {
+                "id": rid,
+                "name": name,
+                "cpf": cpf,
+                "cns": cns,
+                "phone": str(_row_val(row_vals, "phone") or "").strip(),
+                "conditions": sorted(set(conditions)),
+                "last_medico_date": str(_row_val(row_vals, "last_medico_date") or "").strip(),
+                "last_enfermagem_date": str(_row_val(row_vals, "last_enfermagem_date") or "").strip(),
+                "last_antropometria_date": str(_row_val(row_vals, "last_antropometria_date") or "").strip(),
+                "last_sinais_vitais_date": str(_row_val(row_vals, "last_sinais_vitais_date") or "").strip(),
+                "estimated_medico": _parse_bool(_row_val(row_vals, "estimated_medico")),
+                "estimated_enfermagem": _parse_bool(_row_val(row_vals, "estimated_enfermagem")),
+                "base_mode": str(_row_val(row_vals, "base_mode") or "ENFERMAGEM").strip().upper(),
+                "interval_months": _parse_int(_row_val(row_vals, "interval_months"), DEFAULT_INTERVAL_MONTHS),
+                "interval_days": _parse_int(_row_val(row_vals, "interval_days"), DEFAULT_INTERVAL_DAYS),
+                "manual_next_date": str(_row_val(row_vals, "manual_next_date") or "").strip(),
+                "notes": str(_row_val(row_vals, "notes") or "").strip(),
+            }
+            # Campos calculados podem vir da planilha, mas recalculamos em runtime.
+            rec["base_date"] = str(_row_val(row_vals, "base_date") or "").strip()
+            rec["base_source"] = str(_row_val(row_vals, "base_source") or "").strip()
+            rec["next_date"] = str(_row_val(row_vals, "next_date") or "").strip()
+            rec["days_to_due"] = str(_row_val(row_vals, "days_to_due") or "").strip()
+            rec["semaphore"] = str(_row_val(row_vals, "semaphore") or "").strip()
+            out[rid] = rec
+
+        meta: dict = {}
+        if "Meta" in wb.sheetnames:
+            ws_meta = wb["Meta"]
+            raw_meta: dict[str, str] = {}
+            for row_vals in ws_meta.iter_rows(min_row=2, values_only=True):
+                k = str((row_vals[0] if len(row_vals) > 0 else "") or "").strip()
+                v = str((row_vals[1] if len(row_vals) > 1 else "") or "").strip()
+                if k:
+                    raw_meta[k] = v
+            if raw_meta:
+                meta = {"updated_at": raw_meta.get("updated_at", "")}
+                try:
+                    meta["source_files"] = json.loads(raw_meta.get("source_files", "{}"))
+                except Exception:
+                    meta["source_files"] = {}
+                try:
+                    meta["settings"] = json.loads(raw_meta.get("settings", "{}"))
+                except Exception:
+                    meta["settings"] = {}
+        return out, meta
+    finally:
+        wb.close()
+
+
 def load_store_with_meta(path: Path) -> tuple[dict[str, dict], dict]:
     if not path.exists():
         return {}, {}
@@ -524,7 +737,7 @@ def save_store(
             "source_files": source_files or {},
             "settings": settings or {},
         },
-        "patients": sorted(records.values(), key=lambda r: (_priority_order(str(r.get("semaphore", ""))), int(r.get("days_to_due") if str(r.get("days_to_due", "")).strip() not in {"", "None"} else 999999), _norm_spaces(r.get("name", "")))),
+        "patients": _sorted_patients(records),
     }
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
@@ -548,10 +761,12 @@ class AprazamentoApp(tk.Toplevel):
             pass
 
         self.base_dir_var = tk.StringVar(value=str(base_dir or (Path.home() / "Desktop" / "APS_RESULTADOS")))
+        self.import_source_mode_var = tk.StringVar(value="PASTA")
+        self.import_file_var = tk.StringVar(value="")
         self.search_var = tk.StringVar()
         self.semaphore_filter_var = tk.StringVar(value="TODOS")
         self.condition_filter_var = tk.StringVar(value="TODAS")
-        self.status_var = tk.StringVar(value="Selecione a pasta de resultados e importe C1..C7.")
+        self.status_var = tk.StringVar(value="Selecione pasta ou arquivo e importe C1..C7.")
         self.count_var = tk.StringVar(value="0 pacientes")
         self.files_var = tk.StringVar(value="Arquivos: -")
         self.settings_preset_var = tk.StringVar(value=str(DEFAULT_SETTINGS["interval_preset"]))
@@ -564,6 +779,7 @@ class AprazamentoApp(tk.Toplevel):
         self.filtered_ids: list[str] = []
         self.current_id: str | None = None
         self.source_files: dict[str, str] = {}
+        self.collapsed_month_keys: set[str] = set()
         self._settings_window: tk.Toplevel | None = None
 
         self.name_var = tk.StringVar(value="-")
@@ -583,13 +799,16 @@ class AprazamentoApp(tk.Toplevel):
         self.notes_var = tk.StringVar()
 
         self._build_ui()
-        self._load_existing_store()
-        if auto_import:
+        loaded_existing = self._load_existing_store()
+        if auto_import and not loaded_existing:
             self._import_folder(silent_errors=True)
         self._apply_filter()
 
     def _store_path(self) -> Path:
         return Path(self.base_dir_var.get().strip()) / STORE_FILENAME
+
+    def _store_excel_path(self) -> Path:
+        return Path(self.base_dir_var.get().strip()) / STORE_XLSX_FILENAME
 
     def _current_settings_payload(self) -> dict:
         return {
@@ -673,9 +892,16 @@ class AprazamentoApp(tk.Toplevel):
         tk.Label(line, text="Pasta:", bg="#EEF4F8").pack(side="left")
         tk.Entry(line, textvariable=self.base_dir_var).pack(side="left", fill="x", expand=True, padx=(6, 6))
         tk.Button(line, text="Escolher", command=self._choose_folder).pack(side="left")
+        tk.Button(line, text="Escolher arquivo", command=self._choose_file).pack(side="left", padx=(6, 0))
         tk.Button(line, text="Importar C1..C7", command=self._import_folder, bg="#1F4E79", fg="white").pack(side="left", padx=(6, 0))
         tk.Button(line, text="Configuracao", command=self._open_settings_window).pack(side="left", padx=(6, 0))
         tk.Button(line, text="Salvar base", command=self._save_store_clicked).pack(side="left", padx=(6, 0))
+
+        src_line = tk.Frame(self, bg="#EEF4F8")
+        src_line.pack(fill="x", padx=12, pady=(0, 8))
+        tk.Label(src_line, text="Arquivo (opcional):", bg="#EEF4F8").pack(side="left")
+        tk.Entry(src_line, textvariable=self.import_file_var).pack(side="left", fill="x", expand=True, padx=(6, 6))
+        tk.Button(src_line, text="Limpar arquivo", command=self._clear_selected_file).pack(side="left")
 
         filters = tk.Frame(self, bg="#EEF4F8")
         filters.pack(fill="x", padx=12, pady=(0, 8))
@@ -694,6 +920,8 @@ class AprazamentoApp(tk.Toplevel):
         cb_cond = ttk.Combobox(filters, textvariable=self.condition_filter_var, values=("TODAS", "C2", "C3", "C4", "C5", "C6", "C7"), state="readonly", width=10)
         cb_cond.pack(side="left", padx=(6, 10))
         cb_cond.bind("<<ComboboxSelected>>", lambda _e: self._apply_filter())
+        tk.Button(filters, text="Expandir meses", command=self._expand_all_months).pack(side="left", padx=(0, 6))
+        tk.Button(filters, text="Recolher meses", command=self._collapse_all_months).pack(side="left", padx=(0, 10))
 
         tk.Label(filters, textvariable=self.count_var, bg="#EEF4F8", fg="#1F4E79").pack(side="right")
 
@@ -703,7 +931,9 @@ class AprazamentoApp(tk.Toplevel):
         body.columnconfigure(1, weight=1)
         body.rowconfigure(0, weight=1)
 
-        self.tree = ttk.Treeview(body, columns=("sem", "dias", "nome", "tel", "cond", "prox"), show="headings")
+        self.tree = ttk.Treeview(body, columns=("sem", "dias", "nome", "tel", "cond", "prox"), show="tree headings")
+        self.tree.heading("#0", text="Mes")
+        self.tree.column("#0", width=170, anchor="w", stretch=False)
         for key, title, width, anc in [
             ("sem", "Semaforo", 110, "center"),
             ("dias", "Dias", 70, "center"),
@@ -719,8 +949,11 @@ class AprazamentoApp(tk.Toplevel):
         self.tree.tag_configure("amarelo", background="#FFF4CC")
         self.tree.tag_configure("verde", background="#EAF7EA")
         self.tree.tag_configure("sem_data", background="#F2F2F2")
+        self.tree.tag_configure("month_header", background="#DCE9F6")
         self.tree.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
+        self.tree.bind("<<TreeviewOpen>>", self._on_month_open)
+        self.tree.bind("<<TreeviewClose>>", self._on_month_close)
         y_scroll = ttk.Scrollbar(body, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=y_scroll.set)
         y_scroll.grid(row=0, column=0, sticky="nse")
@@ -799,13 +1032,52 @@ class AprazamentoApp(tk.Toplevel):
     def _choose_folder(self):
         d = filedialog.askdirectory(initialdir=self.base_dir_var.get().strip() or str(Path.home()))
         if d:
+            self.import_source_mode_var.set("PASTA")
+            self.import_file_var.set("")
             self.base_dir_var.set(d)
             self._load_existing_store()
             self._apply_filter()
 
-    def _load_existing_store(self):
-        path = self._store_path()
-        self.records, meta = load_store_with_meta(path)
+    def _choose_file(self):
+        initial = self.base_dir_var.get().strip() or str(Path.home())
+        f = filedialog.askopenfilename(
+            initialdir=initial,
+            title="Selecione uma planilha de indicador (C1..C7)",
+            filetypes=[("Excel", "*.xlsx *.xls")],
+        )
+        if not f:
+            return
+        self.import_source_mode_var.set("ARQUIVO")
+        self.import_file_var.set(f)
+        self.base_dir_var.set(str(Path(f).parent))
+        self._load_existing_store()
+        self._apply_filter()
+        self.status_var.set(f"Arquivo selecionado para importacao: {Path(f).name}")
+
+    def _clear_selected_file(self):
+        self.import_source_mode_var.set("PASTA")
+        self.import_file_var.set("")
+        self.status_var.set("Modo pasta ativo. Clique em 'Importar C1..C7'.")
+
+    def _load_existing_store(self) -> bool:
+        path_json = self._store_path()
+        path_xlsx = self._store_excel_path()
+        source_label = ""
+        self.records = {}
+        meta: dict = {}
+
+        if path_xlsx.exists():
+            try:
+                self.records, meta = load_store_excel_with_meta(path_xlsx)
+                source_label = path_xlsx.name
+            except Exception:
+                self.records = {}
+                meta = {}
+
+        if not self.records and path_json.exists():
+            self.records, meta = load_store_with_meta(path_json)
+            source_label = path_json.name
+
         self.source_files = meta.get("source_files", {}) if isinstance(meta, dict) else {}
         self._load_settings_from_payload(meta.get("settings") if isinstance(meta, dict) else None)
         _months, days = self._interval_from_settings()
@@ -816,7 +1088,12 @@ class AprazamentoApp(tk.Toplevel):
             self.files_var.set("Arquivos: " + " | ".join(f"{k}:{Path(v).name}" for k, v in sorted(self.source_files.items())))
         else:
             self.files_var.set("Arquivos: -")
-        self.status_var.set(f"Base carregada: {len(self.records)} pacientes.")
+        if self.records:
+            label = source_label or "base local"
+            self.status_var.set(f"Base carregada ({label}): {len(self.records)} pacientes.")
+            return True
+        self.status_var.set("Sem base salva. Use 'Importar C1..C7' para a primeira carga.")
+        return False
 
     def _open_settings_window(self):
         if self._settings_window and self._settings_window.winfo_exists():
@@ -908,14 +1185,40 @@ class AprazamentoApp(tk.Toplevel):
         default_base_mode = str(self.settings_base_mode_var.get() or "ENFERMAGEM").upper()
         if default_base_mode not in BASE_MODES:
             default_base_mode = "ENFERMAGEM"
+        source_label = f"pasta {folder.name}"
         try:
-            records, source_files = build_records_from_folder(
-                folder,
-                existing_records=self.records,
-                default_base_mode=default_base_mode,
-                default_interval_months=default_months,
-                default_interval_days=default_days,
-            )
+            use_file_mode = self.import_source_mode_var.get().strip().upper() == "ARQUIVO" and bool(self.import_file_var.get().strip())
+            if use_file_mode:
+                selected_file = Path(self.import_file_var.get().strip())
+                if not selected_file.exists():
+                    raise FileNotFoundError(f"Arquivo nao encontrado: {selected_file}")
+                folder = selected_file.parent
+                self.base_dir_var.set(str(folder))
+                files = find_latest_indicator_files(folder)
+                selected_code = detect_indicator_code_from_path(selected_file)
+                if selected_code:
+                    files[selected_code] = selected_file
+                elif "C1" not in files:
+                    raise FileNotFoundError(
+                        "Nao foi possivel identificar o indicador do arquivo selecionado "
+                        "e tambem nao foi encontrada planilha C1 na pasta."
+                    )
+                records, source_files = build_records_from_indicator_files(
+                    files,
+                    existing_records=self.records,
+                    default_base_mode=default_base_mode,
+                    default_interval_months=default_months,
+                    default_interval_days=default_days,
+                )
+                source_label = f"arquivo {selected_file.name}"
+            else:
+                records, source_files = build_records_from_folder(
+                    folder,
+                    existing_records=self.records,
+                    default_base_mode=default_base_mode,
+                    default_interval_months=default_months,
+                    default_interval_days=default_days,
+                )
         except Exception as exc:
             if not silent_errors:
                 messagebox.showerror("Erro ao importar", str(exc))
@@ -927,22 +1230,24 @@ class AprazamentoApp(tk.Toplevel):
         self.files_var.set("Arquivos: " + " | ".join(f"{k}:{Path(v).name}" for k, v in sorted(source_files.items())))
         self._apply_filter()
         if silent_errors:
-            self.status_var.set(f"Autoimportacao concluida: {len(self.records)} pacientes.")
+            self.status_var.set(f"Autoimportacao concluida ({source_label}): {len(self.records)} pacientes.")
         else:
-            self.status_var.set(f"Importacao concluida: {len(self.records)} pacientes.")
+            self.status_var.set(f"Importacao concluida ({source_label}): {len(self.records)} pacientes.")
         self._save_store_clicked(silent=True)
 
     def _save_store_clicked(self, silent: bool = False):
         folder = Path(self.base_dir_var.get().strip())
         folder.mkdir(parents=True, exist_ok=True)
-        path = self._store_path()
+        path_json = self._store_path()
+        path_xlsx = self._store_excel_path()
         try:
-            save_store(path, self.records, source_files=self.source_files, settings=self._current_settings_payload())
+            save_store(path_json, self.records, source_files=self.source_files, settings=self._current_settings_payload())
+            save_store_excel(path_xlsx, self.records, source_files=self.source_files, settings=self._current_settings_payload())
         except Exception as exc:
             messagebox.showerror("Erro ao salvar", str(exc))
             return
         if not silent:
-            self.status_var.set(f"Base salva em {path.name}.")
+            self.status_var.set(f"Base salva em {path_xlsx.name}.")
 
     def _record_matches_filter(self, rec: dict, filt: FilterState) -> bool:
         if filt.semaphore != "TODOS" and str(rec.get("semaphore")) != filt.semaphore:
@@ -961,6 +1266,59 @@ class AprazamentoApp(tk.Toplevel):
         ]).lower()
         return term in hay
 
+    def _month_group_for_record(self, rec: dict) -> tuple[str, tuple[int, int], str]:
+        next_dt = parse_date(rec.get("next_date"))
+        if not next_dt:
+            return "SEM_DATA", (9999, 99), "SEM DATA"
+        key = f"{next_dt.year:04d}-{next_dt.month:02d}"
+        label = f"{MONTH_NAMES[next_dt.month - 1]} {next_dt.year}"
+        return key, (next_dt.year, next_dt.month), label
+
+    @staticmethod
+    def _month_iid(month_key: str) -> str:
+        return f"month::{month_key}"
+
+    @staticmethod
+    def _month_key_from_iid(iid: str) -> str | None:
+        if iid.startswith("month::"):
+            return iid.split("::", 1)[1]
+        return None
+
+    def _ensure_record_visible(self, record_id: str):
+        parent = self.tree.parent(record_id)
+        while parent:
+            self.tree.item(parent, open=True)
+            key = self._month_key_from_iid(parent)
+            if key:
+                self.collapsed_month_keys.discard(key)
+            parent = self.tree.parent(parent)
+
+    def _on_month_open(self, _evt=None):
+        focus_iid = self.tree.focus() or ""
+        key = self._month_key_from_iid(focus_iid)
+        if key:
+            self.collapsed_month_keys.discard(key)
+
+    def _on_month_close(self, _evt=None):
+        focus_iid = self.tree.focus() or ""
+        key = self._month_key_from_iid(focus_iid)
+        if key:
+            self.collapsed_month_keys.add(key)
+
+    def _expand_all_months(self):
+        for iid in self.tree.get_children(""):
+            self.tree.item(iid, open=True)
+            key = self._month_key_from_iid(iid)
+            if key:
+                self.collapsed_month_keys.discard(key)
+
+    def _collapse_all_months(self):
+        for iid in self.tree.get_children(""):
+            self.tree.item(iid, open=False)
+            key = self._month_key_from_iid(iid)
+            if key:
+                self.collapsed_month_keys.add(key)
+
     def _apply_filter(self):
         filt = FilterState(
             term=self.search_var.get().strip().lower(),
@@ -971,13 +1329,40 @@ class AprazamentoApp(tk.Toplevel):
             self.tree.delete(iid)
 
         rows = list(self.records.values())
-        rows.sort(key=lambda r: (_priority_order(str(r.get("semaphore"))), int(r.get("days_to_due")) if str(r.get("days_to_due", "")).strip() not in {"", "None"} else 999999, _norm_spaces(r.get("name"))))
+        rows.sort(
+            key=lambda r: (
+                self._month_group_for_record(r)[1],
+                _priority_order(str(r.get("semaphore"))),
+                int(r.get("days_to_due")) if str(r.get("days_to_due", "")).strip() not in {"", "None"} else 999999,
+                _norm_spaces(r.get("name")),
+            )
+        )
         self.filtered_ids = []
+        month_nodes: dict[str, str] = {}
+        month_labels: dict[str, str] = {}
+        month_counts: dict[str, int] = {}
         for rec in rows:
             if not self._record_matches_filter(rec, filt):
                 continue
             rid = rec["id"]
             self.filtered_ids.append(rid)
+            month_key, _month_sort, month_label = self._month_group_for_record(rec)
+            month_iid = month_nodes.get(month_key)
+            if month_iid is None:
+                month_iid = self._month_iid(month_key)
+                month_nodes[month_key] = month_iid
+                month_labels[month_key] = month_label
+                month_counts[month_key] = 0
+                self.tree.insert(
+                    "",
+                    "end",
+                    iid=month_iid,
+                    text=month_label,
+                    values=("", "", "", "", "", ""),
+                    open=month_key not in self.collapsed_month_keys,
+                    tags=("month_header",),
+                )
+            month_counts[month_key] = month_counts.get(month_key, 0) + 1
             sem = str(rec.get("semaphore", ""))
             tag = {
                 "VENCIDO": "vencido",
@@ -988,9 +1373,10 @@ class AprazamentoApp(tk.Toplevel):
             }.get(sem, "sem_data")
             conds = " ".join(rec.get("conditions", []))
             self.tree.insert(
-                "",
+                month_iid,
                 "end",
                 iid=rid,
+                text="",
                 values=(
                     sem,
                     rec.get("days_to_due", ""),
@@ -1001,13 +1387,19 @@ class AprazamentoApp(tk.Toplevel):
                 ),
                 tags=(tag,),
             )
+        for month_key, month_iid in month_nodes.items():
+            label = month_labels.get(month_key, month_key)
+            total = month_counts.get(month_key, 0)
+            self.tree.item(month_iid, text=f"{label} ({total})")
         self.count_var.set(f"{len(self.filtered_ids)} pacientes")
 
         if self.current_id and self.tree.exists(self.current_id):
+            self._ensure_record_visible(self.current_id)
             self.tree.selection_set(self.current_id)
             self.tree.focus(self.current_id)
         elif self.filtered_ids:
             self.current_id = self.filtered_ids[0]
+            self._ensure_record_visible(self.current_id)
             self.tree.selection_set(self.current_id)
             self.tree.focus(self.current_id)
             self._load_selected_into_form()
@@ -1039,6 +1431,7 @@ class AprazamentoApp(tk.Toplevel):
         self.current_id = record_id
         self._apply_filter()
         if self.tree.exists(record_id):
+            self._ensure_record_visible(record_id)
             self.tree.selection_set(record_id)
             self.tree.focus(record_id)
             self.tree.see(record_id)
@@ -1186,7 +1579,10 @@ class AprazamentoApp(tk.Toplevel):
         sel = self.tree.selection()
         if not sel:
             return
-        self.current_id = sel[0]
+        selected_iid = sel[0]
+        if selected_iid not in self.records:
+            return
+        self.current_id = selected_iid
         self._load_selected_into_form()
 
     def _load_selected_into_form(self):

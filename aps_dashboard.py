@@ -433,10 +433,10 @@ class APSDashboard(tk.Toplevel):
             "busca": tk.BooleanVar(value=True),
             "classificacao": tk.BooleanVar(value=True),
             "risco": tk.BooleanVar(value=True),
-            "comparativo_indicador": tk.BooleanVar(value=True),
-            "manual_media": tk.BooleanVar(value=True),
-            "manual_classificacao": tk.BooleanVar(value=True),
+            "manual_media": tk.BooleanVar(value=False),
+            "manual_classificacao": tk.BooleanVar(value=False),
         }
+        self._pdf_checkbuttons: dict[str, ttk.Checkbutton] = {}
         self.action_filter_var = tk.StringVar()
         self.action_sort_var = tk.StringVar(value="Urgencia")
         self.action_class_filter_var = tk.StringVar(value="TODAS")
@@ -469,6 +469,7 @@ class APSDashboard(tk.Toplevel):
         self._auto_refresh_after_id = None
         self._build_ui()
         self._set_startup_idle_state()
+        self._update_pdf_option_states()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
         # Janela sempre a frente
         self.lift()
@@ -503,6 +504,7 @@ class APSDashboard(tk.Toplevel):
         self.action_top_bairros_var.set("Top bairros com maior concentracao: sem dados.")
         self.action_patient_detail_var.set("Selecione um paciente na fila para ver detalhes.")
         self.overview_alerts_var.set("Alertas operacionais: atualize o dashboard para gerar os alertas.")
+        self._update_pdf_option_states()
 
     def _build_ui(self):
         header_txt = "Dashboard APS v2 - Operacao e Prioridades"
@@ -532,10 +534,11 @@ class APSDashboard(tk.Toplevel):
         ttk.Button(top, text="Atualizar", command=self.refresh).pack(side="left")
         ttk.Button(top, text="Exportar relatorio PDF", command=self.exportar_relatorio_pdf).pack(side="left", padx=(8,0))
 
-        # Seletor de pasta
-        ttk.Label(top, text="  Pasta:").pack(side="left", padx=(16,4))
+        # Seletor de fonte (pasta inteira ou arquivo unico)
+        ttk.Label(top, text="  Fonte:").pack(side="left", padx=(16,4))
         ttk.Entry(top, textvariable=self.folder_var, width=38).pack(side="left")
         ttk.Button(top, text="Trocar pasta", command=self._change_folder).pack(side="left", padx=(4,16))
+        ttk.Button(top, text="Selecionar arquivo", command=self._pick_single_file).pack(side="left", padx=(0, 12))
 
         ttk.Label(top, text="Historico:").pack(side="left", padx=(0,6))
         self.cbo_indicator = ttk.Combobox(top, textvariable=self.indicator_var, state="readonly", width=8)
@@ -544,13 +547,18 @@ class APSDashboard(tk.Toplevel):
 
         pdf_opts = ttk.LabelFrame(root, text="Graficos no PDF")
         pdf_opts.pack(fill="x", padx=4, pady=(0, 8))
-        ttk.Checkbutton(pdf_opts, text="Panorama principal", variable=self.pdf_graph_flags["panorama"]).pack(side="left", padx=(8, 10))
-        ttk.Checkbutton(pdf_opts, text="Busca ativa", variable=self.pdf_graph_flags["busca"]).pack(side="left", padx=(0, 10))
-        ttk.Checkbutton(pdf_opts, text="Distribuicao classificacao", variable=self.pdf_graph_flags["classificacao"]).pack(side="left", padx=(0, 10))
-        ttk.Checkbutton(pdf_opts, text="Risco por bairro", variable=self.pdf_graph_flags["risco"]).pack(side="left", padx=(0, 10))
-        ttk.Checkbutton(pdf_opts, text="Comparativo atual x anterior", variable=self.pdf_graph_flags["comparativo_indicador"]).pack(side="left", padx=(0, 10))
-        ttk.Checkbutton(pdf_opts, text="Manual: media", variable=self.pdf_graph_flags["manual_media"]).pack(side="left", padx=(0, 10))
-        ttk.Checkbutton(pdf_opts, text="Manual: classificacao", variable=self.pdf_graph_flags["manual_classificacao"]).pack(side="left", padx=(0, 10))
+        self._pdf_checkbuttons["panorama"] = ttk.Checkbutton(pdf_opts, text="Grafico 1 (painel principal)", variable=self.pdf_graph_flags["panorama"])
+        self._pdf_checkbuttons["panorama"].pack(side="left", padx=(8, 10))
+        self._pdf_checkbuttons["busca"] = ttk.Checkbutton(pdf_opts, text="Busca ativa", variable=self.pdf_graph_flags["busca"])
+        self._pdf_checkbuttons["busca"].pack(side="left", padx=(0, 10))
+        self._pdf_checkbuttons["classificacao"] = ttk.Checkbutton(pdf_opts, text="Distribuicao classificacao", variable=self.pdf_graph_flags["classificacao"])
+        self._pdf_checkbuttons["classificacao"].pack(side="left", padx=(0, 10))
+        self._pdf_checkbuttons["risco"] = ttk.Checkbutton(pdf_opts, text="Risco por bairro", variable=self.pdf_graph_flags["risco"])
+        self._pdf_checkbuttons["risco"].pack(side="left", padx=(0, 10))
+        self._pdf_checkbuttons["manual_media"] = ttk.Checkbutton(pdf_opts, text="Comparar arquivos: media", variable=self.pdf_graph_flags["manual_media"])
+        self._pdf_checkbuttons["manual_media"].pack(side="left", padx=(0, 10))
+        self._pdf_checkbuttons["manual_classificacao"] = ttk.Checkbutton(pdf_opts, text="Comparar arquivos: classificacao", variable=self.pdf_graph_flags["manual_classificacao"])
+        self._pdf_checkbuttons["manual_classificacao"].pack(side="left", padx=(0, 10))
 
         cards = ttk.Frame(root)
         cards.pack(fill="x", padx=4)
@@ -640,7 +648,7 @@ class APSDashboard(tk.Toplevel):
         top = ttk.Frame(root)
         top.pack(fill="x", padx=4, pady=10)
         ttk.Button(top, text="Selecionar pasta", command=self._pick_action_folder).pack(side="left", padx=(0, 6))
-        ttk.Button(top, text="Selecionar arquivos", command=self._pick_action_files).pack(side="left", padx=(0, 10))
+        ttk.Button(top, text="Selecionar arquivo(s)", command=self._pick_action_files).pack(side="left", padx=(0, 10))
         ttk.Label(top, text="Filtro:").pack(side="left")
         ent = ttk.Entry(top, textvariable=self.action_filter_var, width=32)
         ent.pack(side="left", padx=(6, 10))
@@ -859,7 +867,7 @@ class APSDashboard(tk.Toplevel):
 
     def _pick_action_files(self):
         initial = self.action_folder_var.get().strip() or str(self.results_dir)
-        paths = filedialog.askopenfilenames(title="Selecione planilhas para o painel", initialdir=initial, filetypes=[("Excel", "*.xlsx *.xls")])
+        paths = filedialog.askopenfilenames(title="Selecione 1 ou mais planilhas para o painel", initialdir=initial, filetypes=[("Excel", "*.xlsx *.xls")])
         if not paths:
             return
         self.action_source_mode.set("arquivos")
@@ -1616,6 +1624,108 @@ class APSDashboard(tk.Toplevel):
         box.pack(fill="x", padx=4, pady=(0, 8))
         ttk.Label(box, textvariable=self.overview_alerts_var, anchor="w", justify="left").pack(fill="x", padx=8, pady=8)
 
+    def _update_pdf_option_states(self):
+        overview_ready = self.summary_df is not None and not self.summary_df.empty
+        manual_ready = self.manual_compare_merged_df is not None and not self.manual_compare_merged_df.empty
+        availability = {
+            "panorama": overview_ready,
+            "busca": overview_ready,
+            "classificacao": overview_ready,
+            "risco": overview_ready,
+            "manual_media": manual_ready,
+            "manual_classificacao": manual_ready,
+        }
+        for key, var in self.pdf_graph_flags.items():
+            enabled = availability.get(key, True)
+            if not enabled:
+                var.set(False)
+            chk = self._pdf_checkbuttons.get(key)
+            if chk is not None:
+                chk.configure(state=("normal" if enabled else "disabled"))
+
+    def _summary_row_from_snapshot(self, code: str, snap: Snapshot) -> dict:
+        row = {
+            "Indicador": code,
+            "Indicador Label": indicator_display_label(code),
+            "Arquivo": snap.arquivo.name,
+            "Total": snap.total,
+            "Busca Ativa": snap.busca_ativa,
+            "Media Pontuacao": snap.media_pontuacao,
+            "Critico0": snap.critico_zero,
+        }
+        for cls in CLASS_ORDER:
+            row[cls] = int(snap.classes.get(cls, 0))
+        return row
+
+    def _compare_row_from_snapshots(self, code: str, atual: Snapshot, anterior: Snapshot) -> dict:
+        row = {
+            "Indicador": code,
+            "Indicador Label": indicator_display_label(code),
+            "Arquivo Atual": atual.arquivo.name,
+            "Atual": atual.media_pontuacao,
+            "Anterior": anterior.media_pontuacao,
+            "Variacao  Media": round(atual.media_pontuacao - anterior.media_pontuacao, 1),
+            "Variacao  Total": atual.total - anterior.total,
+            "Variacao  Busca Ativa": atual.busca_ativa - anterior.busca_ativa,
+        }
+        for cls in CLASS_ORDER:
+            row[f"Variacao  {cls}"] = int(atual.classes.get(cls, 0)) - int(anterior.classes.get(cls, 0))
+        return row
+
+    def _build_single_file_summary(self, source_file: Path, warnings: list[str] | None = None) -> pd.DataFrame:
+        try:
+            code = (infer_indicator_code_from_path(source_file) or source_file.stem).upper()
+            snap = build_snapshot(code, source_file)
+            return pd.DataFrame([self._summary_row_from_snapshot(code, snap)])
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"{source_file.name}: falha ao ler ({exc})")
+            return pd.DataFrame()
+
+    def _build_single_file_comparison(self, source_file: Path, warnings: list[str] | None = None) -> pd.DataFrame:
+        code = (infer_indicator_code_from_path(source_file) or "").upper()
+        if not code:
+            return pd.DataFrame()
+        try:
+            atual = build_snapshot(code, source_file)
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"{code}: falha comparacao no arquivo atual ({exc})")
+            return pd.DataFrame()
+        grouped = indicator_files(source_file.parent)
+        files = grouped.get(code, [])
+        if len(files) < 2:
+            return pd.DataFrame()
+        cur_resolved = source_file.resolve()
+        prev_path = None
+        for idx, candidate in enumerate(files):
+            if candidate.resolve() != cur_resolved:
+                continue
+            if idx > 0:
+                prev_path = files[idx - 1]
+            break
+        if prev_path is None:
+            prev_path = files[-2]
+        try:
+            anterior = build_snapshot(code, prev_path)
+            return pd.DataFrame([self._compare_row_from_snapshots(code, atual, anterior)])
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"{code}: falha ao ler comparativo anterior ({exc})")
+            return pd.DataFrame()
+
+    def _pick_single_file(self):
+        initial = str(Path(self.folder_var.get().strip()).parent) if Path(self.folder_var.get().strip()).is_file() else (self.folder_var.get().strip() or str(self.results_dir))
+        selected = filedialog.askopenfilename(
+            title="Selecione um arquivo de indicador (C1..C7)",
+            initialdir=initial,
+            filetypes=[("Excel", "*.xlsx *.xls")],
+        )
+        if not selected:
+            return
+        self.folder_var.set(selected)
+        self.refresh()
+
     def _class_from_media(self, value) -> str:
         pts = pd.to_numeric(pd.Series([value]), errors="coerce").fillna(0).iloc[0]
         if pts > 75:
@@ -1686,9 +1796,15 @@ class APSDashboard(tk.Toplevel):
         self.overview_alerts_var.set("\n".join(lines) if lines else "Alertas operacionais: sem achados relevantes.")
 
     def refresh(self):
-        current_folder = Path(self.folder_var.get().strip() or self.results_dir)
-        self.results_dir = current_folder
-        files_grouped = indicator_files(self.results_dir)
+        source_path = Path(self.folder_var.get().strip() or self.results_dir)
+        single_file_mode = source_path.is_file()
+        if single_file_mode:
+            self.results_dir = source_path.parent
+            source_code = (infer_indicator_code_from_path(source_path) or source_path.stem).upper()
+            files_grouped = {source_code: [source_path]}
+        else:
+            self.results_dir = source_path
+            files_grouped = indicator_files(self.results_dir)
         self._last_indicator_signature = self._current_indicator_signature()
         codes = list(files_grouped.keys())
         self.cbo_indicator["values"] = codes or ["C1"]
@@ -1696,8 +1812,12 @@ class APSDashboard(tk.Toplevel):
             self.indicator_var.set(codes[0])
 
         warnings: list[str] = []
-        self.summary_df = build_current_summary(self.results_dir, warnings=warnings)
-        self.compare_df = build_comparison_summary(self.results_dir, warnings=warnings)
+        if single_file_mode:
+            self.summary_df = self._build_single_file_summary(source_path, warnings=warnings)
+            self.compare_df = self._build_single_file_comparison(source_path, warnings=warnings)
+        else:
+            self.summary_df = build_current_summary(self.results_dir, warnings=warnings)
+            self.compare_df = build_comparison_summary(self.results_dir, warnings=warnings)
         ap_summary = load_aprazamento_summary(self.results_dir)
         self.card_vars["ap_total"].set(str(ap_summary["total"]))
         self.card_vars["ap_vencido"].set(str(ap_summary["vencido"]))
@@ -1726,6 +1846,7 @@ class APSDashboard(tk.Toplevel):
                 msg = f"{msg} {len(warnings)} arquivo(s) ignorado(s)."
             self.status_var.set(msg)
             self._refresh_overview_alerts()
+            self._update_pdf_option_states()
             return
 
         for _, row in self.summary_df.iterrows():
@@ -1761,10 +1882,12 @@ class APSDashboard(tk.Toplevel):
         self._refresh_overview_charts()
         self._refresh_overview_alerts()
         self._refresh_actions_view()
-        msg = f"Panorama atualizado com {len(self.summary_df)} indicador(es)."
+        src_label = f"arquivo {source_path.name}" if single_file_mode else f"{len(self.summary_df)} indicador(es)"
+        msg = f"Panorama atualizado com {src_label}."
         if warnings:
             msg = f"{msg} {len(warnings)} arquivo(s) ignorado(s)."
         self.status_var.set(msg)
+        self._update_pdf_option_states()
         self._schedule_auto_unified_refresh()
 
     def _refresh_overview_charts(self):
@@ -2033,8 +2156,10 @@ class APSDashboard(tk.Toplevel):
             self.canvasm2.draw_idle()
             self.compare_insights_var.set(self._build_compare_insights(path_a, path_b))
 
+            self._update_pdf_option_states()
             self.status_compare.set("Comparacao concluida com sucesso.")
         except Exception as exc:
+            self._update_pdf_option_states()
             messagebox.showerror("Erro", str(exc))
             self.status_compare.set(f"Erro: {exc}")
 
@@ -2321,11 +2446,11 @@ class APSDashboard(tk.Toplevel):
         png2 = pasta / f"{timestamp}_grafico_busca_ativa_por_indicador.png"
         png3 = pasta / f"{timestamp}_grafico_distribuicao_classificacao.png"
         png4 = pasta / f"{timestamp}_grafico_risco_por_bairro.png"
-        png5 = pasta / f"{timestamp}_grafico_comparativo_atual_anterior.png"
         excel_path = pasta / f"{timestamp}_Dados_Relatorio_APS.xlsx"
 
         try:
             include = self.pdf_graph_flags
+            manual_ready = self.manual_compare_merged_df is not None and not self.manual_compare_merged_df.empty
             if include["panorama"].get():
                 self.fig1.savefig(png1, dpi=180, bbox_inches="tight")
             if include["busca"].get():
@@ -2334,39 +2459,13 @@ class APSDashboard(tk.Toplevel):
                 self.fig3.savefig(png3, dpi=180, bbox_inches="tight")
             if include["risco"].get():
                 self.fig4.savefig(png4, dpi=180, bbox_inches="tight")
-            compare_overall_ready = False
-            if include["comparativo_indicador"].get() and self.compare_df is not None and not self.compare_df.empty:
-                temp = self.compare_df.copy()
-                x = temp.get("Indicador Label", temp.get("Indicador", pd.Series(dtype=str))).astype(str).tolist()
-                cur = pd.to_numeric(temp.get("Atual", pd.Series(dtype=float)), errors="coerce")
-                prev = pd.to_numeric(temp.get("Anterior", pd.Series(dtype=float)), errors="coerce")
-                if len(x) and not cur.dropna().empty:
-                    import matplotlib.pyplot as plt
-                    figc, axc = plt.subplots(figsize=(10, 4), dpi=150)
-                    idx = list(range(len(x)))
-                    w = 0.38
-                    cur_vals = [float(v) if pd.notna(v) else 0.0 for v in cur]
-                    prev_vals = [float(v) if pd.notna(v) else 0.0 for v in prev]
-                    b1 = axc.bar([i - w/2 for i in idx], cur_vals, width=w, label="Atual", color="#2E75B6")
-                    b2 = axc.bar([i + w/2 for i in idx], prev_vals, width=w, label="Anterior", color="#ED7D31")
-                    axc.set_xticks(idx)
-                    axc.set_xticklabels(x, rotation=18, ha="right")
-                    axc.set_ylabel("Pontuacao media")
-                    axc.set_title("Comparativo atual x anterior por indicador")
-                    axc.legend()
-                    axc.bar_label(b1, fmt="%.1f", padding=2, fontsize=7)
-                    axc.bar_label(b2, fmt="%.1f", padding=2, fontsize=7)
-                    figc.tight_layout()
-                    figc.savefig(png5, dpi=180, bbox_inches="tight")
-                    plt.close(figc)
-                    compare_overall_ready = True
 
             compare_png1 = None
             compare_png2 = None
-            if include["manual_media"].get() and hasattr(self, "figm1"):
+            if include["manual_media"].get() and manual_ready and hasattr(self, "figm1"):
                 compare_png1 = pasta / f"{timestamp}_grafico_comparacao_media.png"
                 self.figm1.savefig(compare_png1, dpi=180, bbox_inches="tight")
-            if include["manual_classificacao"].get() and hasattr(self, "figm2"):
+            if include["manual_classificacao"].get() and manual_ready and hasattr(self, "figm2"):
                 compare_png2 = pasta / f"{timestamp}_grafico_comparacao_classificacao.png"
                 self.figm2.savefig(compare_png2, dpi=180, bbox_inches="tight")
 
@@ -2444,7 +2543,7 @@ class APSDashboard(tk.Toplevel):
 
             manual_df_export = pd.DataFrame()
             manual_tree_export = pd.DataFrame()
-            if self.path_a.get().strip() and self.path_b.get().strip():
+            if manual_ready and self.path_a.get().strip() and self.path_b.get().strip():
                 manual_df_export = pd.DataFrame([{
                     "Arquivo A": self.summary_a.get("arquivo", "-"),
                     "Total A": self.summary_a.get("total", "-"),
@@ -2466,9 +2565,8 @@ class APSDashboard(tk.Toplevel):
                 "Busca ativa": "SIM" if include["busca"].get() else "NAO",
                 "Distribuicao classificacao": "SIM" if include["classificacao"].get() else "NAO",
                 "Risco por bairro": "SIM" if include["risco"].get() else "NAO",
-                "Comparativo atual x anterior": "SIM" if include["comparativo_indicador"].get() else "NAO",
-                "Manual media": "SIM" if include["manual_media"].get() else "NAO",
-                "Manual classificacao": "SIM" if include["manual_classificacao"].get() else "NAO",
+                "Comparar arquivos - media": "SIM" if (include["manual_media"].get() and manual_ready) else "NAO",
+                "Comparar arquivos - classificacao": "SIM" if (include["manual_classificacao"].get() and manual_ready) else "NAO",
             }])
 
             with pd.ExcelWriter(excel_path, engine="openpyxl") as writer:
@@ -2515,8 +2613,6 @@ class APSDashboard(tk.Toplevel):
                 img_list.append((png3, "Grafico - Distribuicao atual por classificacao"))
             if include["risco"].get() and png4.exists():
                 img_list.append((png4, "Grafico - Risco por bairro"))
-            if compare_overall_ready:
-                img_list.append((png5, "Grafico - Comparativo atual x anterior por indicador"))
             if img_list:
                 story.append(PageBreak())
                 for idx_img, (img_path, title) in enumerate(img_list, start=1):
@@ -2527,7 +2623,7 @@ class APSDashboard(tk.Toplevel):
                     if idx_img % 2 == 0 and idx_img < len(img_list):
                         story.append(PageBreak())
 
-            if self.path_a.get().strip() and self.path_b.get().strip():
+            if manual_ready and self.path_a.get().strip() and self.path_b.get().strip():
                 story.append(PageBreak())
                 story.append(Paragraph("Comparacao manual entre arquivos", styles["Heading1"]))
                 story.append(Paragraph(

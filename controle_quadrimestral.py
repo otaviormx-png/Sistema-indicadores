@@ -46,7 +46,17 @@ def _extract_report_date(path: Path) -> date:
                 m = date_re.search(line)
                 if m:
                     return datetime.strptime(m.group(1), "%d/%m/%Y").date()
-    return date.today()
+    stem_re = re.search(r"(\d{2})[._-](\d{2})[._-](\d{4})", path.stem)
+    if stem_re:
+        try:
+            dd, mm, yyyy = [int(x) for x in stem_re.groups()]
+            return date(yyyy, mm, dd)
+        except Exception:
+            pass
+    try:
+        return datetime.fromtimestamp(path.stat().st_mtime).date()
+    except Exception:
+        return date.today()
 
 
 def quadrimester_of(d: date) -> Quadrimester:

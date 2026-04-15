@@ -7,6 +7,7 @@ from datetime import datetime
 import os
 from pathlib import Path
 import re
+import unicodedata
 import tkinter as tk
 from tkinter import filedialog, messagebox, ttk
 
@@ -37,16 +38,19 @@ def _norm_text(value) -> str:
     return txt
 
 
+def _norm_key(value) -> str:
+    txt = unicodedata.normalize("NFKD", _norm_text(value)).encode("ascii", "ignore").decode("ascii").lower()
+    return re.sub(r"[^a-z0-9]+", "", txt)
+
+
 def _norm_person(value) -> str:
-    txt = _norm_text(value).lower()
-    txt = re.sub(r"[^a-z0-9]+", "", txt)
-    return txt
+    return _norm_key(value)
 
 
 def _pick_col(df: pd.DataFrame, *aliases: str) -> str | None:
-    norm_map = {re.sub(r"[^a-z0-9]+", "", str(c).lower()): c for c in df.columns}
+    norm_map = {_norm_key(c): c for c in df.columns}
     for alias in aliases:
-        key = re.sub(r"[^a-z0-9]+", "", alias.lower())
+        key = _norm_key(alias)
         if key in norm_map:
             return norm_map[key]
     return None

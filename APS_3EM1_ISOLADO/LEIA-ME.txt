@@ -1,0 +1,15 @@
+﻿APS LITE 3 EM 1 (ISOLADO)
+
+Conteudo:
+- APS_LITE_3em1.exe (launcher unico)
+- config.toml
+- INSTALAR_APS_3EM1.bat (instala rapido)
+
+Como usar no computador sem Python:
+1) Extraia o ZIP.
+2) Execute INSTALAR_APS_3EM1.bat.
+3) Abra pelo atalho "APS LITE 3 em 1" na area de trabalho.
+
+Observacoes:
+- O executavel ja e completo (nao precisa Python).
+- O config.toml fica ao lado do EXE para manter as configuracoes.

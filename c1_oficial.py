@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import sys
@@ -140,7 +140,7 @@ def build_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
     else:
         percentual = 0.0
         criterio = "NÃO"
-        pendencias = "Nao foi possivel calcular denominador do C1 oficial"
+        pendencias = "Não foi possível calcular denominador do C1 oficial"
 
     classificacao, prioridade = classify_score(percentual)
 
@@ -187,3 +187,4 @@ if __name__ == "__main__":
     if len(sys.argv) < 3:
         raise SystemExit(f"Uso: python {Path(__file__).name} <entrada.csv/xlsx> <saida.xlsx>")
     processar(sys.argv[1], sys.argv[2])
+
