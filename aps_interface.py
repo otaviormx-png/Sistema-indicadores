@@ -15,6 +15,7 @@ from sistema_aps import ROOT_DESKTOP, OUT_DIR, desktop_files, get_indicators
 import aps_dashboard
 import aps_clonador_interativo
 import aps_comparador_paciente
+import aps_aprazamento
 import aps_log
 import aps_tema
 
@@ -183,6 +184,7 @@ class APSInterface(tk.Tk):
             ("Abrir pasta de resultados",  self._open_output),
             ("Abrir dashboard",            self._open_dashboard),
             ("Abrir editor da planilha APS", self._open_editor_planilha),
+            ("Abrir controle de aprazamento", self._open_aprazamento),
             ("Ver historico de execucoes", self._open_historico),
         ]:
             ttk.Button(box_actions, text=text, command=cmd,
@@ -364,6 +366,18 @@ class APSInterface(tk.Tk):
                 win.lift(); win.focus_force()
         except Exception as exc:
             messagebox.showerror("Erro ao abrir comparador", str(exc))
+
+    def _open_aprazamento(self):
+        try:
+            win = aps_aprazamento.launch_aprazamento(
+                master=self,
+                base_dir=Path(self.output_dir.get()),
+                auto_import=True,
+            )
+            if win:
+                win.lift(); win.focus_force()
+        except Exception as exc:
+            messagebox.showerror("Erro ao abrir controle de aprazamento", str(exc))
 
     def _open_historico(self):
         try:

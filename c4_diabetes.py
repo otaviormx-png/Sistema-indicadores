@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import sys
@@ -13,29 +12,79 @@ from aps_utils import (
     classify_score,
     count_ge,
     has_any_text,
+    is_team_type_76,
     months_leq,
     process_indicator,
-    to_numeric,
     value,
+    value_norm,
 )
 
 FILTER_FUNC = None
 
 CRITERIA = [
-    {"letter":"A", "label":"Consulta médico/enf (6m)", "weight":20, "func": lambda b,r: months_leq(b.get("Meses desde o último atendimento médico"), 6) or months_leq(b.get("Meses desde o último atendimento de enfermagem"), 6) or has_any_text(value(r, "Data da última consulta"))},
-    {"letter":"B", "label":"PA aferida (6m)", "weight":15, "func": lambda b,r: has_any_text(b.get("Última medição de pressão arterial"))},
-    {"letter":"C", "label":"Peso+altura (12m)", "weight":15, "func": lambda b,r: has_any_text(b.get("Última medição de peso")) and has_any_text(b.get("Última medição de altura"))},
-    {"letter":"D", "label":"Visitas ACS ≥2", "weight":20, "func": lambda b,r: count_ge(b.get("Quantidade de visitas domiciliares"), 2)},
-    {"letter":"E", "label":"Hb glicada (12m)", "weight":15, "func": lambda b,r: has_any_text(value(r, "Hemoglobina glicada", "Data da última avaliação de hemoglobina glicada", "Data da última solicitação de hemoglobina glicada"))},
-    {"letter":"F", "label":"Avaliação dos pés (12m)", "weight":15, "func": lambda b,r: has_any_text(value(r, "Data da avaliação dos pés"))},
+    {
+        "letter": "A",
+        "label": "Consulta medico/enf (6m)",
+        "weight": 20,
+        "func": lambda b, r: months_leq(b.get("Meses desde o último atendimento médico"), 6)
+        or months_leq(b.get("Meses desde o último atendimento de enfermagem"), 6)
+        or has_any_text(value_norm(r, "Data da última consulta")),
+    },
+    {
+        "letter": "B",
+        "label": "PA aferida (6m)",
+        "weight": 15,
+        "func": lambda b, r: has_any_text(b.get("Última medição de pressão arterial")),
+    },
+    {
+        "letter": "C",
+        "label": "Peso+altura (12m)",
+        "weight": 15,
+        "func": lambda b, r: has_any_text(b.get("Última medição de peso"))
+        and has_any_text(b.get("Última medição de altura")),
+    },
+    {
+        "letter": "D",
+        "label": "Visitas ACS >=2",
+        "weight": 20,
+        "func": lambda b, r: is_team_type_76(r) or count_ge(b.get("Quantidade de visitas domiciliares"), 2),
+    },
+    {
+        "letter": "E",
+        "label": "Hb glicada (12m)",
+        "weight": 15,
+        "func": lambda b, r: has_any_text(
+            value_norm(
+                r,
+                "Hemoglobina glicada",
+                "Data da última avaliação de hemoglobina glicada",
+                "Data da última solicitação de hemoglobina glicada",
+            )
+        ),
+    },
+    {
+        "letter": "F",
+        "label": "Avaliacao dos pes (12m)",
+        "weight": 15,
+        "func": lambda b, r: has_any_text(value_norm(r, "Data da avaliação dos pés")),
+    },
 ]
-EXTRA_COLUMNS = ['Hemoglobina glicada', 'Data da última avaliação de hemoglobina glicada', 'Data da última solicitação de hemoglobina glicada', 'Data da avaliação dos pés', 'Data da última consulta', 'Consultas (últimos 36 meses)', 'Incluído na lista de problemas e condições']
-CODE = 'C4'
-TITULO = 'PLANILHA DE CUIDADO DA PESSOA COM DIABETES  |  Indicador C4 – Atenção Primária à Saúde'
-CRITERIO_BLOCO = '◀ CRITÉRIOS C4 – NOTA METODOLÓGICA ▶'
-SUBTITULO = 'A=Consulta (20)  |  B=PA (15)  |  C=Peso+altura (15)  |  D=Visitas ACS (20)  |  E=Hemoglobina glicada (15)  |  F=Pés (15)'
-THEME_KEYWORDS = ['Diabetes', 'diabetes']
+EXTRA_COLUMNS = [
+    "Hemoglobina glicada",
+    "Data da última avaliação de hemoglobina glicada",
+    "Data da última solicitação de hemoglobina glicada",
+    "Data da avaliação dos pés",
+    "Data da última consulta",
+    "Consultas (últimos 36 meses)",
+    "Incluído na lista de problemas e condições",
+]
+CODE = "C4"
+TITULO = "PLANILHA DE CUIDADO DA PESSOA COM DIABETES  |  Indicador C4 – Atenção Primária à Saúde"
+CRITERIO_BLOCO = "◀ CRITÉRIOS C4 – NOTA METODOLÓGICA ▶"
+SUBTITULO = "A=Consulta (20)  |  B=PA (15)  |  C=Peso+altura (15)  |  D=Visitas ACS (20)  |  E=Hemoglobina glicada (15)  |  F=Pes (15)"
+THEME_KEYWORDS = ["Diabetes", "diabetes"]
 OFFICIAL_LIKE = True
+
 
 def build_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -82,6 +131,7 @@ def build_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
             df[col] = ""
     return df[ordered]
 
+
 CFG = IndicatorConfig(
     code=CODE,
     titulo=TITULO,
@@ -94,8 +144,10 @@ CFG = IndicatorConfig(
     official_like=OFFICIAL_LIKE,
 )
 
+
 def processar(entrada: str | Path, saida: str | Path):
     process_indicator(CFG, entrada, saida)
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:

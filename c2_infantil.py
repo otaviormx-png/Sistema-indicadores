@@ -13,6 +13,7 @@ from aps_utils import (
     classify_score,
     count_ge,
     has_any_text,
+    is_team_type_76,
     months_leq,
     process_indicator,
     to_numeric,
@@ -25,7 +26,7 @@ CRITERIA = [
     {"letter":"A", "label":"1ª consulta até 30 dias", "weight":20, "func": lambda b,r: has_any_text(value(r, "Data da primeira consulta")) and to_numeric(value(r, "Idade na primeira consulta"), 999) <= 30},
     {"letter":"B", "label":"≥9 consultas até 24m", "weight":20, "func": lambda b,r: count_ge(value(r, "Quantidade de consultas até 24 meses"), 9)},
     {"letter":"C", "label":"≥9 peso/altura até 24m", "weight":20, "func": lambda b,r: count_ge(value(r, "Quantidade de medições de peso/altura simultâneas até 24 meses"), 9)},
-    {"letter":"D", "label":"2 visitas nos marcos", "weight":20, "func": lambda b,r: has_any_text(value(r, "Data da primeira visita domiciliar")) and has_any_text(value(r, "Data da segunda visita domiciliar"))},
+    {"letter":"D", "label":"2 visitas nos marcos", "weight":20, "func": lambda b,r: is_team_type_76(r) or (has_any_text(value(r, "Data da primeira visita domiciliar")) and has_any_text(value(r, "Data da segunda visita domiciliar")))},
     {"letter":"E", "label":"Vacinas completas", "weight":20, "func": lambda b,r: (
         has_any_text(value(r, "Difteria, Tétano, Pertusis, Hepatite B, Haemophilus Influenza B")) and
         has_any_text(value(r, "Poliomielite")) and

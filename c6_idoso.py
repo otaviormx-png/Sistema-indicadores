@@ -13,6 +13,7 @@ from aps_utils import (
     classify_score,
     count_ge,
     has_any_text,
+    is_team_type_76,
     months_leq,
     process_indicator,
     to_numeric,
@@ -24,7 +25,7 @@ FILTER_FUNC = lambda b,r: to_numeric(str(b.get("Idade","")).split(" ")[0], 0) >=
 CRITERIA = [
     {"letter":"A", "label":"Consulta médico/enf (12m)", "weight":25, "func": lambda b,r: months_leq(b.get("Meses desde o último atendimento médico"), 12) or months_leq(b.get("Meses desde o último atendimento de enfermagem"), 12)},
     {"letter":"B", "label":"Antropometria (12m)", "weight":25, "func": lambda b,r: count_ge(value(r, "Registros de peso e altura simultâneos nos últimos 12 meses"), 1) or (has_any_text(b.get("Última medição de peso")) and has_any_text(b.get("Última medição de altura")))},
-    {"letter":"C", "label":"Visitas ACS ≥2", "weight":25, "func": lambda b,r: count_ge(b.get("Quantidade de visitas domiciliares"), 2)},
+    {"letter":"C", "label":"Visitas ACS ≥2", "weight":25, "func": lambda b,r: is_team_type_76(r) or count_ge(b.get("Quantidade de visitas domiciliares"), 2)},
     {"letter":"D", "label":"Vacina influenza (12m)", "weight":25, "func": lambda b,r: has_any_text(value(r, "Influenza (últimos 12 meses)"))},
 ]
 EXTRA_COLUMNS = ['Registros de peso e altura simultâneos nos últimos 12 meses', 'Influenza (últimos 12 meses)', 'IVCF-20 Índice', 'IVCF-20 Pontuação']

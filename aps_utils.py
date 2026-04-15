@@ -54,6 +54,15 @@ BASE_CLINICAL_COLUMNS = [
     "Quantidade de visitas domiciliares",
 ]
 
+# Campos derivados na saída para facilitar leitura operacional:
+# convertem recência (dias/meses desde atendimento) em data estimada.
+BASE_CLINICAL_COLUMNS += [
+    "Data estimada do ultimo atendimento medico",
+    "Data estimada do ultimo atendimento de enfermagem",
+    "Data estimada do ultimo atendimento odontologico",
+    "Data estimada da ultima visita domiciliar",
+]
+
 COMMON_CANDIDATES = {
     "Nome": ["Nome", "Nome do cidadão", "Paciente", "Usuário", "Cidadão"],
     "Data de nascimento": ["Data de nascimento", "Nascimento", "Dt nascimento"],
@@ -82,6 +91,27 @@ COMMON_CANDIDATES = {
     "Últimas visitas domiciliares": ["Últimas visitas domiciliares"],
     "Quantidade de visitas domiciliares": ["Quantidade de visitas domiciliares"],
 }
+
+COMMON_CANDIDATES.update(
+    {
+        "Data estimada do ultimo atendimento medico": [
+            "Data estimada do ultimo atendimento medico",
+            "Data estimada do último atendimento médico",
+        ],
+        "Data estimada do ultimo atendimento de enfermagem": [
+            "Data estimada do ultimo atendimento de enfermagem",
+            "Data estimada do último atendimento de enfermagem",
+        ],
+        "Data estimada do ultimo atendimento odontologico": [
+            "Data estimada do ultimo atendimento odontologico",
+            "Data estimada do último atendimento odontológico",
+        ],
+        "Data estimada da ultima visita domiciliar": [
+            "Data estimada da ultima visita domiciliar",
+            "Data estimada da última visita domiciliar",
+        ],
+    }
+)
 
 @dataclass
 class IndicatorConfig:
@@ -308,6 +338,122 @@ def has_any_text(val) -> bool:
     return str(val).strip() not in {"", "-", "nan", "None"}
 
 
+def age_years(val, default: int = -1) -> int:
+    s = str(val).strip()
+    if s in {"", "-", "nan", "None"}:
+        return default
+    m = re.search(r"\d+", s)
+    return int(m.group(0)) if m else default
+
+
+def value_norm(row: pd.Series | dict, *candidates: str, default=""):
+    norm_map = {normalize_text(k): k for k in row.keys()}
+    for candidate in candidates:
+        key = norm_map.get(normalize_text(candidate))
+        if key is None:
+            continue
+        val = row.get(key)
+        if pd.notna(val) and str(val).strip() not in {"", "-", "nan", "None"}:
+            return val
+    return default
+
+
+def is_team_type_76(row: pd.Series | dict) -> bool:
+    team_raw = value_norm(
+        row,
+        "Tipo de equipe",
+        "Tipo Equipe",
+        "Tipo da equipe",
+        "Codigo do tipo da equipe",
+        "Codigo tipo equipe",
+        "Equipe tipo",
+        "Tipo eSF/eAP",
+        default="",
+    )
+    txt = normalize_text(team_raw)
+    if not txt:
+        return False
+    if re.search(r"(^|\D)76(\D|$)", txt):
+        return True
+    return "tipo 76" in txt
+
+
+def within_last_months(val, limit_months: int, ref_date=None) -> bool:
+    dt = parse_date(val)
+    if pd.isna(dt):
+        return False
+    ref = pd.Timestamp(ref_date) if ref_date is not None else pd.Timestamp.now().normalize()
+    diff_days = (ref - dt).days
+    return 0 <= diff_days <= (limit_months * 31)
+
+
+def has_recent_date_or_text(val, limit_months: int) -> bool:
+    if within_last_months(val, limit_months):
+        return True
+    dt = parse_date(val)
+    if pd.notna(dt):
+        return False
+    return has_any_text(val)
+
+
+def _non_negative_number(val) -> float | None:
+    n = to_numeric(val, default=None)
+    if n is None:
+        return None
+    try:
+        n = float(n)
+    except Exception:
+        return None
+    if n < 0:
+        return None
+    return n
+
+
+def _extract_month_day_from_text(val) -> tuple[float | None, float | None]:
+    txt = normalize_text(val)
+    if not txt or txt in {"-", "nan", "none"}:
+        return None, None
+    months = None
+    days = None
+    month_matches = re.findall(r"(\d+(?:[.,]\d+)?)\s*mes(?:es)?", txt)
+    day_matches = re.findall(r"(\d+(?:[.,]\d+)?)\s*dia(?:s)?", txt)
+    if month_matches:
+        months = sum(float(m.replace(",", ".")) for m in month_matches)
+    if day_matches:
+        days = sum(float(d.replace(",", ".")) for d in day_matches)
+    return months, days
+
+
+def estimated_last_date_from_recency(days_value, months_value, ref_date=None) -> str:
+    ref = pd.Timestamp(ref_date) if ref_date is not None else pd.Timestamp.now().normalize()
+    days_n = _non_negative_number(days_value)
+    months_n = _non_negative_number(months_value)
+    m_txt1, d_txt1 = _extract_month_day_from_text(months_value)
+    m_txt2, d_txt2 = _extract_month_day_from_text(days_value)
+
+    has_month = months_n is not None or m_txt1 is not None or m_txt2 is not None
+    has_day = days_n is not None or d_txt1 is not None or d_txt2 is not None
+    if not has_month and not has_day:
+        return ""
+
+    if months_n is None:
+        months_n = float((m_txt1 or 0) + (m_txt2 or 0))
+    if days_n is None:
+        days_n = float((d_txt1 or 0) + (d_txt2 or 0))
+
+    dt = ref
+    if has_month:
+        whole_months = int(months_n or 0)
+        frac_days = int(round(((months_n or 0) - whole_months) * 30))
+        if whole_months:
+            dt = dt - pd.DateOffset(months=whole_months)
+        if frac_days:
+            dt = dt - pd.Timedelta(days=frac_days)
+    if has_day and int(round(days_n or 0)) > 0:
+        dt = dt - pd.Timedelta(days=int(round(days_n or 0)))
+    return dt.strftime("%d/%m/%Y")
+
+
 def build_base_row(row: pd.Series, extra_columns: list[str]) -> dict:
     """
     Monta um dicionário de saída com as colunas padrão + extras,
@@ -340,6 +486,34 @@ def build_base_row(row: pd.Series, extra_columns: list[str]) -> dict:
         candidates = COMMON_CANDIDATES.get(out_col, [out_col])
         found = _find_in_row(candidates)
         built[out_col] = row.get(found, "") if found else ""
+
+    def _row_value(*candidates: str):
+        found = _find_in_row(list(candidates))
+        return row.get(found, "") if found else ""
+
+    def _row_value_strict(*candidates: str):
+        for cand in candidates:
+            found = norm_index.get(normalize_text(cand))
+            if found is not None:
+                return row.get(found, "")
+        return ""
+
+    built["Data estimada do ultimo atendimento medico"] = estimated_last_date_from_recency(
+        _row_value_strict("Dias desde o ultimo atendimento medico", "Dias desde o último atendimento médico"),
+        _row_value_strict("Meses desde o ultimo atendimento medico", "Meses desde o último atendimento médico"),
+    )
+    built["Data estimada do ultimo atendimento de enfermagem"] = estimated_last_date_from_recency(
+        _row_value_strict("Dias desde o ultimo atendimento de enfermagem", "Dias desde o último atendimento de enfermagem"),
+        _row_value_strict("Meses desde o ultimo atendimento de enfermagem", "Meses desde o último atendimento de enfermagem"),
+    )
+    built["Data estimada do ultimo atendimento odontologico"] = estimated_last_date_from_recency(
+        _row_value_strict("Dias desde o ultimo atendimento odontologico", "Dias desde o último atendimento odontológico"),
+        _row_value_strict("Meses desde o ultimo atendimento odontologico", "Meses desde o último atendimento odontológico"),
+    )
+    built["Data estimada da ultima visita domiciliar"] = estimated_last_date_from_recency(
+        _row_value_strict("Dias desde a ultima visita domiciliar", "Dias desde a última visita domiciliar"),
+        _row_value_strict("Meses desde a ultima visita domiciliar", "Meses desde a última visita domiciliar"),
+    )
     return built
 
 
@@ -495,9 +669,13 @@ def create_data_sheet(wb: Workbook, df: pd.DataFrame, cfg: IndicatorConfig):
         for i, crit in enumerate(criteria_cols, crit_start):
             val = row.get(crit, "")
             cell = ws.cell(row=row_idx, column=i, value=val)
-            if str(val).upper() == "SIM":
+            val_up = str(val).strip().upper()
+            if val_up == "SIM":
                 cell.fill = fill(COR["verde_ok"])
                 cell.font = font(bold=True, size=9, color=COR["verde_texto"])
+            elif val_up in {"N/A", "NA"}:
+                cell.fill = fill("E7E6E6")
+                cell.font = font(bold=True, size=9, color="595959")
             else:
                 cell.fill = fill(COR["vermelho"])
                 cell.font = font(bold=True, size=9, color=COR["vermelho_txt"])
@@ -579,8 +757,11 @@ def create_busca_sheet(wb: Workbook, df: pd.DataFrame, cfg: IndicatorConfig):
                 else:
                     cell.font = font(bold=True, color=COR["verde_escuro"], size=9)
             elif 5 <= col_idx < 5 + len(criterio_headers):
-                if str(val).upper() == "SIM":
+                val_up = str(val).strip().upper()
+                if val_up == "SIM":
                     cell.fill = fill(COR["verde_ok"]); cell.font = font(bold=True, color=COR["verde_escuro"], size=9)
+                elif val_up in {"N/A", "NA"}:
+                    cell.fill = fill("E7E6E6"); cell.font = font(bold=True, color="595959", size=9)
                 else:
                     cell.fill = fill(COR["vermelho"]); cell.font = font(bold=True, color=COR["vermelho_txt"], size=9)
             elif col_idx == 5 + len(criterio_headers):
@@ -649,11 +830,25 @@ def create_summary_sheet(wb: Workbook, df: pd.DataFrame, cfg: IndicatorConfig):
         hdr.fill = fill(COR["roxo_claro"]); hdr.font = font(bold=True, color=COR["roxo"], size=9)
         hdr.alignment = align("center", wrap=True); hdr.border = border_thin()
         crit_col = f"{item['letter']} - {item['label']}"
-        qtd = int((df[crit_col] == "SIM").sum()) if total else 0
-        pct = round((qtd / total) * 100, 1) if total else 0
-        v = ws.cell(row0 + 1, col, f"{qtd} / {total}\n({pct}%)")
-        bg = COR["verde_ok"] if pct > 75 else COR["amarelo"] if pct > 50 else COR["vermelho"]
-        fg = COR["verde_escuro"] if pct > 75 else COR["amarelo_txt"] if pct > 50 else COR["vermelho_txt"]
+        if total:
+            serie = df[crit_col].astype(str).str.strip().str.upper()
+            aplicaveis = serie[~serie.isin({"N/A", "NA"})]
+            base = int(len(aplicaveis))
+            qtd = int((aplicaveis == "SIM").sum())
+            pct = round((qtd / base) * 100, 1) if base else 0
+            txt = f"{qtd} / {base}\n({pct}%)" if base else "N/A"
+        else:
+            qtd = 0
+            pct = 0
+            txt = "N/A"
+            base = 0
+        v = ws.cell(row0 + 1, col, txt)
+        if not base:
+            bg = "E7E6E6"
+            fg = "595959"
+        else:
+            bg = COR["verde_ok"] if pct > 75 else COR["amarelo"] if pct > 50 else COR["vermelho"]
+            fg = COR["verde_escuro"] if pct > 75 else COR["amarelo_txt"] if pct > 50 else COR["vermelho_txt"]
         v.fill = fill(bg); v.font = font(bold=True, color=fg, size=10); v.alignment = align("center", wrap=True); v.border = border_thin()
 
     for col, w in RESUMO_WIDTHS.items():
@@ -741,8 +936,7 @@ def candidate_file_for_indicator(files: list[Path], cfg: IndicatorConfig) -> Pat
 
     for f in files:
         name = normalize_text(f.name)
-        full = normalize_text(str(f))
-        if "resultado" in name or "aps_resultados" in full or "_interativa" in name:
+        if "resultado" in name or "_interativa" in name:
             continue
         if f.suffix.lower() not in {".csv", ".xlsx", ".xls"}:
             continue

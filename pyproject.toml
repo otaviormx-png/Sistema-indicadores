@@ -48,6 +48,7 @@ packages = ["."]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
+addopts = "-p no:cacheprovider -p no:tmpdir"
 
 # ------------------------------------------------------------------
 # Geração do EXE (execute: uv run pyinstaller Central_APS.spec)

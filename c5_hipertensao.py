@@ -13,6 +13,7 @@ from aps_utils import (
     classify_score,
     count_ge,
     has_any_text,
+    is_team_type_76,
     months_leq,
     process_indicator,
     to_numeric,
@@ -25,7 +26,7 @@ CRITERIA = [
     {"letter":"A", "label":"Consulta médico/enf (6m)", "weight":25, "func": lambda b,r: months_leq(b.get("Meses desde o último atendimento médico"), 6) or months_leq(b.get("Meses desde o último atendimento de enfermagem"), 6) or count_ge(value(r, "Quantidade de consultas"), 1)},
     {"letter":"B", "label":"PA aferida (6m)", "weight":25, "func": lambda b,r: has_any_text(b.get("Última medição de pressão arterial"))},
     {"letter":"C", "label":"Peso+altura (12m)", "weight":25, "func": lambda b,r: has_any_text(b.get("Última medição de peso")) and has_any_text(b.get("Última medição de altura"))},
-    {"letter":"D", "label":"Visitas ACS ≥2", "weight":25, "func": lambda b,r: count_ge(b.get("Quantidade de visitas domiciliares"), 2)},
+    {"letter":"D", "label":"Visitas ACS ≥2", "weight":25, "func": lambda b,r: is_team_type_76(r) or count_ge(b.get("Quantidade de visitas domiciliares"), 2)},
 ]
 EXTRA_COLUMNS = ['Data da última consulta', 'Quantidade de medições de pressão arterial', 'Quantidade de consultas', 'Incluído na lista de problemas e condições']
 CODE = 'C5'

@@ -1,4 +1,3 @@
-
 from __future__ import annotations
 
 import sys
@@ -9,46 +8,105 @@ from aps_utils import (
     BASE_CLINICAL_COLUMNS,
     BASE_PERSON_COLUMNS,
     IndicatorConfig,
+    age_years,
     build_base_row,
     classify_score,
-    count_ge,
     has_any_text,
-    months_leq,
+    has_recent_date_or_text,
     process_indicator,
-    to_numeric,
     value,
+    value_norm,
 )
 
-FILTER_FUNC = None
+
+def _idade(base: dict) -> int:
+    return age_years(base.get("Idade"), -1)
+
+
+def _faixa(base: dict, minimo: int, maximo: int) -> bool:
+    idade = _idade(base)
+    return minimo <= idade <= maximo
+
+
+FILTER_FUNC = lambda b, r: _faixa(b, 9, 69)
 
 CRITERIA = [
-    {"letter":"A", "label":"Colo uterino (25-64a / 36m)", "weight":20, "func": lambda b,r: (
-        25 <= to_numeric(str(b.get("Idade", "")).split(" ")[0], 0) <= 64 and (
-            has_any_text(value(r, "Exame de rastreamento de câncer de colo de útero última solicitação")) or
-            has_any_text(value(r, "Exame de rastreamento de câncer de colo de útero data última solicitação")) or
-            has_any_text(value(r, "Exame de rastreamento de câncer de colo de útero última avaliação")) or
-            has_any_text(value(r, "Exame de rastreamento de câncer de colo de útero data última avaliação"))
-        )
-    ) or not (25 <= to_numeric(str(b.get("Idade", "")).split(" ")[0], 0) <= 64)},
-    {"letter":"B", "label":"HPV (9-14a)", "weight":30, "func": lambda b,r: (
-        9 <= to_numeric(str(b.get("Idade", "")).split(" ")[0], 0) <= 14 and has_any_text(value(r, "HPV"))
-    ) or not (9 <= to_numeric(str(b.get("Idade", "")).split(" ")[0], 0) <= 14)},
-    {"letter":"C", "label":"Saúde sexual/reprodutiva (12m)", "weight":30, "func": lambda b,r: has_any_text(value(r, "Data da última consulta de saúde sexual e reprodutiva"))},
-    {"letter":"D", "label":"Mamografia (50-69a / 24m)", "weight":20, "func": lambda b,r: (
-        50 <= to_numeric(str(b.get("Idade", "")).split(" ")[0], 0) <= 69 and (
-            has_any_text(value(r, "Exame de rastreamento de câncer de mama data Última solicitação")) or
-            has_any_text(value(r, "Exame de rastreamento de câncer de mama data Última realização")) or
-            has_any_text(value(r, "Exame de rastreamento de câncer de mama data Última avaliação"))
-        )
-    ) or not (50 <= to_numeric(str(b.get("Idade", "")).split(" ")[0], 0) <= 69)},
+    {
+        "letter": "A",
+        "label": "Colo uterino (25-64a / 36m)",
+        "weight": 20,
+        "applies": lambda b, r: _faixa(b, 25, 64),
+        "func": lambda b, r: any(
+            has_recent_date_or_text(
+                value_norm(r, field),
+                36,
+            )
+            for field in [
+                "Exame de rastreamento de câncer de colo de útero última solicitação",
+                "Exame de rastreamento de câncer de colo de útero data última solicitação",
+                "Exame de rastreamento de câncer de colo de útero última avaliação",
+                "Exame de rastreamento de câncer de colo de útero data última avaliação",
+            ]
+        ),
+    },
+    {
+        "letter": "B",
+        "label": "HPV (9-14a)",
+        "weight": 30,
+        "applies": lambda b, r: _faixa(b, 9, 14),
+        "func": lambda b, r: has_any_text(value_norm(r, "HPV")),
+    },
+    {
+        "letter": "C",
+        "label": "Saúde sexual/reprodutiva (12m)",
+        "weight": 30,
+        "applies": lambda b, r: _faixa(b, 14, 69),
+        "func": lambda b, r: has_recent_date_or_text(
+            value_norm(r, "Data da última consulta de saúde sexual e reprodutiva"),
+            12,
+        ),
+    },
+    {
+        "letter": "D",
+        "label": "Mamografia (50-69a / 24m)",
+        "weight": 20,
+        "applies": lambda b, r: _faixa(b, 50, 69),
+        "func": lambda b, r: any(
+            has_recent_date_or_text(
+                value_norm(r, field),
+                24,
+            )
+            for field in [
+                "Exame de rastreamento de câncer de mama data última solicitação",
+                "Exame de rastreamento de câncer de mama data última realização",
+                "Exame de rastreamento de câncer de mama data última avaliação",
+            ]
+        ),
+    },
 ]
-EXTRA_COLUMNS = ['Data da última consulta de saúde sexual e reprodutiva', 'Rastreamento e acompanhamento de HIV data ultima avaliação', 'Rastreamento e acompanhamento de Sífilis data ultima avaliação', 'Rastreamento e acompanhamento de Hepatite B data ultima avaliação', 'Rastreamento e acompanhamento de Hepatite C data ultima avaliação', 'Exame de rastreamento de câncer de colo de útero última solicitação', 'Exame de rastreamento de câncer de colo de útero data última solicitação', 'Exame de rastreamento de câncer de colo de útero última avaliação', 'Exame de rastreamento de câncer de colo de útero data última avaliação', 'Exame de rastreamento de câncer de mama data Última solicitação', 'Exame de rastreamento de câncer de mama data Última realização', 'Exame de rastreamento de câncer de mama data Última avaliação', 'HPV']
-CODE = 'C7'
-TITULO = 'PLANILHA DE CUIDADO DA MULHER NA PREVENÇÃO DO CÂNCER  |  Indicador C7 – Atenção Primária à Saúde'
-CRITERIO_BLOCO = '◀ CRITÉRIOS C7 – NOTA METODOLÓGICA ▶'
-SUBTITULO = 'A=colo do útero (20)  |  B=HPV (30)  |  C=saúde sexual/reprodutiva (30)  |  D=mamografia (20)'
-THEME_KEYWORDS = ['Saúde da mulher', 'mulher', 'cancer', 'saude da mulher']
+
+EXTRA_COLUMNS = [
+    "Data da última consulta de saúde sexual e reprodutiva",
+    "Rastreamento e acompanhamento de HIV data ultima avaliação",
+    "Rastreamento e acompanhamento de Sífilis data ultima avaliação",
+    "Rastreamento e acompanhamento de Hepatite B data ultima avaliação",
+    "Rastreamento e acompanhamento de Hepatite C data ultima avaliação",
+    "Exame de rastreamento de câncer de colo de útero última solicitação",
+    "Exame de rastreamento de câncer de colo de útero data última solicitação",
+    "Exame de rastreamento de câncer de colo de útero última avaliação",
+    "Exame de rastreamento de câncer de colo de útero data última avaliação",
+    "Exame de rastreamento de câncer de mama data última solicitação",
+    "Exame de rastreamento de câncer de mama data última realização",
+    "Exame de rastreamento de câncer de mama data última avaliação",
+    "HPV",
+]
+CODE = "C7"
+TITULO = "PLANILHA DE CUIDADO DA MULHER NA PREVENÇÃO DO CÂNCER  |  Indicador C7 – Atenção Primária à Saúde"
+CRITERIO_BLOCO = "◀ CRITÉRIOS C7 – NOTA METODOLÓGICA ▶"
+SUBTITULO = "A=colo do útero (20)  |  B=HPV (30)  |  C=saúde sexual/reprodutiva (30)  |  D=mamografia (20)"
+THEME_KEYWORDS = ["Saúde da mulher", "mulher", "cancer", "saude da mulher"]
 OFFICIAL_LIKE = True
+
 
 def build_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
     rows = []
@@ -63,17 +121,25 @@ def build_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
 
         criterio_vals = []
         pendencias = []
-        score = 0
+        score_raw = 0
+        score_max = 0
 
         for item in CRITERIA:
-            ok = bool(item["func"](base, row))
             crit_name = f"{item['letter']} - {item['label']}"
+            aplica = bool(item["applies"](base, row))
+            if not aplica:
+                criterio_vals.append((crit_name, "N/A"))
+                continue
+
+            score_max += item["weight"]
+            ok = bool(item["func"](base, row))
             criterio_vals.append((crit_name, "SIM" if ok else "NÃO"))
             if ok:
-                score += item["weight"]
+                score_raw += item["weight"]
             else:
                 pendencias.append(item["label"])
 
+        score = round((score_raw / score_max) * 100) if score_max else 0
         classificacao, prioridade = classify_score(score)
         out = {}
         out.update(base)
@@ -95,6 +161,7 @@ def build_dataframe(df_raw: pd.DataFrame) -> pd.DataFrame:
             df[col] = ""
     return df[ordered]
 
+
 CFG = IndicatorConfig(
     code=CODE,
     titulo=TITULO,
@@ -107,8 +174,10 @@ CFG = IndicatorConfig(
     official_like=OFFICIAL_LIKE,
 )
 
+
 def processar(entrada: str | Path, saida: str | Path):
     process_indicator(CFG, entrada, saida)
+
 
 if __name__ == "__main__":
     if len(sys.argv) < 3:

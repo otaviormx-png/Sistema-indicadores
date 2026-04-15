@@ -13,6 +13,7 @@ from aps_utils import (
     classify_score,
     count_ge,
     has_any_text,
+    is_team_type_76,
     months_leq,
     process_indicator,
     to_numeric,
@@ -26,7 +27,7 @@ CRITERIA = [
     {"letter":"B", "label":"≥7 consultas pré-natal", "weight":9, "func": lambda b,r: count_ge(value(r, "Quantidade de atendimentos no pré-natal"), 7)},
     {"letter":"C", "label":"≥7 PA na gestação", "weight":9, "func": lambda b,r: count_ge(value(r, "Quantidade de medições de pressão arterial"), 7)},
     {"letter":"D", "label":"≥7 peso/altura", "weight":9, "func": lambda b,r: count_ge(value(r, "Quantidade de medições simultâneas de peso e altura"), 7)},
-    {"letter":"E", "label":"≥3 visitas ACS pré-natal", "weight":9, "func": lambda b,r: count_ge(value(r, "Quantidade de visitas domiciliares no pré-natal"), 3)},
+    {"letter":"E", "label":"≥3 visitas ACS pré-natal", "weight":9, "func": lambda b,r: is_team_type_76(r) or count_ge(value(r, "Quantidade de visitas domiciliares no pré-natal"), 3)},
     {"letter":"F", "label":"dTpa registrada", "weight":9, "func": lambda b,r: has_any_text(value(r, "dTpa"))},
     {"letter":"G", "label":"Exames 1º trimestre", "weight":9, "func": lambda b,r: (
         has_any_text(value(r, "Exame de HIV no primeiro trimestre")) and
@@ -39,7 +40,7 @@ CRITERIA = [
         has_any_text(value(r, "Exame de Sifilis no terceiro trimestre"))
     )},
     {"letter":"I", "label":"Consulta no puerpério", "weight":9, "func": lambda b,r: count_ge(value(r, "Quantidade de atendimentos no puerpério"), 1) or has_any_text(value(r, "Última consulta de puerpério"))},
-    {"letter":"J", "label":"Visita no puerpério", "weight":9, "func": lambda b,r: count_ge(value(r, "Quantidade de visitas domiciliares no puerpério"), 1)},
+    {"letter":"J", "label":"Visita no puerpério", "weight":9, "func": lambda b,r: is_team_type_76(r) or count_ge(value(r, "Quantidade de visitas domiciliares no puerpério"), 1)},
     {"letter":"K", "label":"Saúde bucal gestação", "weight":9, "func": lambda b,r: count_ge(value(r, "Quantidade de atendimentos odontológicos no pré-natal"), 1)},
 ]
 EXTRA_COLUMNS = ['Risco gestacional', 'DUM', 'IG (DUM) (semanas)', 'IG (DUM) (dias)', 'DPP (DUM)', 'IG (ecografia obstétrica) (semanas)', 'IG (ecografia obstétrica) (dias)', 'DPP (ecografia obstétrica)', 'Quantidade de atendimentos no pré-natal', 'Quantidade de atendimentos até 12 semanas no pré-natal', 'Última consulta de pré-natal', 'Quantidade de atendimentos odontológicos no pré-natal', 'dTpa', 'Quantidade de medições de altura uterina', 'Quantidade de medições de pressão arterial', 'Quantidade de medições simultâneas de peso e altura', 'Exame de HIV no primeiro trimestre', 'Exame de Sífilis no primeiro trimestre)', 'Exame de Hepatite B no primeiro trimestre', 'Exame de Hepatite C no primeiro trimestre', 'Exame de HIV no terceiro trimestre', 'Exame de Sifilis no terceiro trimestre', 'Quantidade de visitas domiciliares no pré-natal', 'Quantidade de visitas domiciliares no puerpério', 'Quantidade de atendimentos no puerpério', 'Última consulta de puerpério']
