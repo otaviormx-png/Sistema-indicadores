@@ -4,8 +4,8 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import datetime
 from difflib import SequenceMatcher
+import json
 import tempfile
-import os
 from pathlib import Path
 import re
 import sys
@@ -48,7 +48,14 @@ class ScrollableTab(ttk.Frame):
             pass
 
 
-CLASS_ORDER = ["Otimo", "Bom", "Suficiente", "Regular", "Ruim", "Critico"]
+CLASS_ORDER = ["Otimo", "Bom", "Suficiente", "Regular"]
+SCORE_LEGEND = [
+    ("Otimo", "76-100 pontos", "#4E79A7"),
+    ("Bom", "51-75 pontos", "#F28E2B"),
+    ("Suficiente", "26-50 pontos", "#2CA02C"),
+    ("Regular", "1-25 pontos", "#D62728"),
+    ("Critico operacional", "0 pontos", "#8B0000"),
+]
 PRIORITY_ORDER = ["Concluido", "Baixa", "Media", "Alta", "URGENTE", "ALTA", "MEDIA", "BAIXA"]
 INDICATOR_SHORT_LABELS = {
     "C1": "C1 Mais acesso",
@@ -79,11 +86,14 @@ class Snapshot:
     media_pontuacao: float
     classes: dict[str, int]
     prioridades: dict[str, int]
+    critico_zero: int
 
 
 def indicator_files(results_dir: Path) -> dict[str, list[Path]]:
     grouped: dict[str, list[Path]] = {}
     for f in results_dir.glob("*.xlsx"):
+        if f.name.startswith("~$"):
+            continue
         code = infer_indicator_code_from_path(f)
         if not code:
             continue
@@ -145,11 +155,14 @@ def parse_stamp(path: Path) -> datetime | None:
 
 
 def read_indicator_dataframe(xlsx_path: Path) -> pd.DataFrame:
-    xls = pd.ExcelFile(xlsx_path)
+    try:
+        xls = pd.ExcelFile(xlsx_path, engine="openpyxl")
+    except Exception as exc:
+        raise ValueError(f"Arquivo invalido: {xlsx_path.name}") from exc
     sheet = next((s for s in xls.sheet_names if "dados" in str(s).lower()), xls.sheet_names[0])
     for header_try in (2, 1, 0):
         try:
-            df = pd.read_excel(xlsx_path, sheet_name=sheet, header=header_try)
+            df = pd.read_excel(xlsx_path, sheet_name=sheet, header=header_try, engine="openpyxl")
             df = df.dropna(how="all")
             if len(df.columns) > 1:
                 if "Nome" in df.columns:
@@ -157,7 +170,10 @@ def read_indicator_dataframe(xlsx_path: Path) -> pd.DataFrame:
                 return df.reset_index(drop=True)
         except Exception:
             continue
-    return pd.read_excel(xlsx_path, sheet_name=sheet).dropna(how="all").reset_index(drop=True)
+    try:
+        return pd.read_excel(xlsx_path, sheet_name=sheet, engine="openpyxl").dropna(how="all").reset_index(drop=True)
+    except Exception as exc:
+        raise ValueError(f"Arquivo invalido: {xlsx_path.name}") from exc
 
 
 def _norm_key(value: str) -> str:
@@ -185,6 +201,7 @@ def build_snapshot(code: str, path: Path) -> Snapshot:
     classes = Counter((df[col_cls] if col_cls else pd.Series(dtype=str)).fillna("Sem classificacao").astype(str))
     prioridades = Counter(df.get("Prioridade", pd.Series(dtype=str)).fillna("Sem prioridade").astype(str))
     busca_ativa = int((pontos < 100).sum()) if total else 0
+    critico_zero = int((pontos == 0).sum()) if total else 0
     return Snapshot(
         indicador=code,
         arquivo=path,
@@ -194,13 +211,19 @@ def build_snapshot(code: str, path: Path) -> Snapshot:
         media_pontuacao=round(float(pontos.mean()) if total else 0.0, 1),
         classes=dict(classes),
         prioridades=dict(prioridades),
+        critico_zero=critico_zero,
     )
 
 
-def build_current_summary(results_dir: Path) -> pd.DataFrame:
+def build_current_summary(results_dir: Path, warnings: list[str] | None = None) -> pd.DataFrame:
     rows = []
     for code, files in indicator_files(results_dir).items():
-        snap = build_snapshot(code, files[-1])
+        try:
+            snap = build_snapshot(code, files[-1])
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"{code}: falha ao ler {files[-1].name} ({exc})")
+            continue
         row = {
             "Indicador": code,
             "Indicador Label": indicator_display_label(code),
@@ -208,6 +231,7 @@ def build_current_summary(results_dir: Path) -> pd.DataFrame:
             "Total": snap.total,
             "Busca Ativa": snap.busca_ativa,
             "Media Pontuacao": snap.media_pontuacao,
+            "Critico0": snap.critico_zero,
         }
         for cls in CLASS_ORDER:
             row[cls] = snap.classes.get(cls, 0)
@@ -215,19 +239,32 @@ def build_current_summary(results_dir: Path) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def build_comparison_summary(results_dir: Path) -> pd.DataFrame:
+def build_comparison_summary(results_dir: Path, warnings: list[str] | None = None) -> pd.DataFrame:
     rows = []
     prev_dir = _find_previous_results_dir(results_dir)
     prev_grouped = indicator_files(prev_dir) if prev_dir else {}
     for code, files in indicator_files(results_dir).items():
-        atual = build_snapshot(code, files[-1])
+        try:
+            atual = build_snapshot(code, files[-1])
+        except Exception as exc:
+            if warnings is not None:
+                warnings.append(f"{code}: falha comparacao atual em {files[-1].name} ({exc})")
+            continue
         anterior = None
         if len(files) >= 2:
-            anterior = build_snapshot(code, files[-2])
+            try:
+                anterior = build_snapshot(code, files[-2])
+            except Exception as exc:
+                if warnings is not None:
+                    warnings.append(f"{code}: falha comparacao anterior em {files[-2].name} ({exc})")
         else:
             prev_files = prev_grouped.get(code, [])
             if prev_files:
-                anterior = build_snapshot(code, prev_files[-1])
+                try:
+                    anterior = build_snapshot(code, prev_files[-1])
+                except Exception as exc:
+                    if warnings is not None:
+                        warnings.append(f"{code}: falha comparacao pasta anterior em {prev_files[-1].name} ({exc})")
         row = {
             "Indicador": code,
             "Indicador Label": indicator_display_label(code),
@@ -242,6 +279,34 @@ def build_comparison_summary(results_dir: Path) -> pd.DataFrame:
             row[f"Variacao  {cls}"] = (atual.classes.get(cls, 0) - anterior.classes.get(cls, 0)) if anterior else None
         rows.append(row)
     return pd.DataFrame(rows)
+
+
+def load_aprazamento_summary(results_dir: Path) -> dict[str, int]:
+    summary = {"total": 0, "vencido": 0, "vermelho": 0, "amarelo": 0, "verde": 0}
+    path = results_dir / "aprazamento_controle.json"
+    if not path.exists():
+        return summary
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return summary
+    patients = payload.get("patients", [])
+    if not isinstance(patients, list):
+        return summary
+    for row in patients:
+        if not isinstance(row, dict):
+            continue
+        semaforo = str(row.get("semaforo", "")).strip().upper()
+        summary["total"] += 1
+        if semaforo == "VENCIDO":
+            summary["vencido"] += 1
+        elif semaforo == "VERMELHO":
+            summary["vermelho"] += 1
+        elif semaforo == "AMARELO":
+            summary["amarelo"] += 1
+        elif semaforo == "VERDE":
+            summary["verde"] += 1
+    return summary
 
 
 def build_history(results_dir: Path, indicador: str) -> pd.DataFrame:
@@ -311,11 +376,10 @@ def count_unique_patients_latest(results_dir: Path) -> int:
 
 
 class APSDashboard(tk.Toplevel):
-    def __init__(self, parent: tk.Misc | None, results_dir: Path, mode: str = "v2"):
+    def __init__(self, parent: tk.Misc | None, results_dir: Path):
         super().__init__(parent)
         self.results_dir = Path(results_dir)
-        self.mode = (mode or "v2").strip().lower()
-        self.title("APS - Dashboard Evolutivo + Comparador" if self.mode == "legacy" else "APS - Dashboard Operacional v2")
+        self.title("APS - Dashboard Operacional v2")
         try:
             self.state("zoomed")
         except Exception:
@@ -332,15 +396,21 @@ class APSDashboard(tk.Toplevel):
             "linhas_brutas": tk.StringVar(value="0"),
             "linhas":   tk.StringVar(value="0"),
             "busca":    tk.StringVar(value="0"),
+            "critico_zero": tk.StringVar(value="0"),
             "media":    tk.StringVar(value="0.0"),
             "delta":    tk.StringVar(value="0.0"),
             "delta_busca": tk.StringVar(value="0"),
+            "ap_total": tk.StringVar(value="0"),
+            "ap_vencido": tk.StringVar(value="0"),
+            "ap_alerta": tk.StringVar(value="0"),
         }
+        self._refresh_warnings: list[str] = []
         self.path_a = tk.StringVar()
         self.path_b = tk.StringVar()
         self.status_var = tk.StringVar(value="Dashboard pronto.")
         self.status_compare = tk.StringVar(value="Selecione dois arquivos XLSX para comparar.")
         self.compare_insights_var = tk.StringVar(value="Execute a comparacao para ver insights de transicao.")
+        self.overview_alerts_var = tk.StringVar(value="Alertas operacionais: atualize o dashboard para gerar os alertas.")
         self.summary_a: dict = {}
         self.summary_b: dict = {}
         self.manual_compare_merged_df = pd.DataFrame()
@@ -369,6 +439,9 @@ class APSDashboard(tk.Toplevel):
         }
         self.action_filter_var = tk.StringVar()
         self.action_sort_var = tk.StringVar(value="Urgencia")
+        self.action_class_filter_var = tk.StringVar(value="TODAS")
+        self.action_priority_filter_var = tk.StringVar(value="TODAS")
+        self.action_indicator_filter_var = tk.StringVar(value="TODOS")
         self.action_simple_mode_var = tk.BooleanVar(value=True)
         self.action_status_var = tk.StringVar(value="Selecione pasta ou arquivos para carregar o painel.")
         self.action_folder_var = tk.StringVar(value=str(results_dir))
@@ -380,6 +453,7 @@ class APSDashboard(tk.Toplevel):
         self.action_patient_detail_var = tk.StringVar(value="Selecione um paciente na fila para ver detalhes.")
         self.action_selected_files: list[Path] = []
         self._action_row_map: dict[str, dict] = {}
+        self.action_view_df = pd.DataFrame()
         self.action_card_vars = {
             "total": tk.StringVar(value="0"),
             "urgente": tk.StringVar(value="0"),
@@ -415,21 +489,23 @@ class APSDashboard(tk.Toplevel):
         self.card_vars["linhas_brutas"].set("0")
         self.card_vars["linhas"].set("0")
         self.card_vars["busca"].set("0")
+        self.card_vars["critico_zero"].set("0")
         self.card_vars["media"].set("0.0")
         self.card_vars["delta"].set("0.0")
         self.card_vars["delta_busca"].set("0")
+        self.card_vars["ap_total"].set("0")
+        self.card_vars["ap_vencido"].set("0")
+        self.card_vars["ap_alerta"].set("0")
         self.status_var.set("Dashboard pronto. Clique em Atualizar para carregar os dados.")
-        if self.mode != "legacy":
-            self.action_status_var.set("Painel pronto. Clique em Carregar painel para ler as planilhas.")
-            self.action_insights_var.set("Leitura rapida: sem dados carregados.")
-            self.action_top_indicators_var.set("Top indicadores criticos: sem dados.")
-            self.action_top_bairros_var.set("Top bairros com maior concentracao: sem dados.")
-            self.action_patient_detail_var.set("Selecione um paciente na fila para ver detalhes.")
+        self.action_status_var.set("Painel pronto. Clique em Carregar painel para ler as planilhas.")
+        self.action_insights_var.set("Leitura rapida: sem dados carregados.")
+        self.action_top_indicators_var.set("Top indicadores criticos: sem dados.")
+        self.action_top_bairros_var.set("Top bairros com maior concentracao: sem dados.")
+        self.action_patient_detail_var.set("Selecione um paciente na fila para ver detalhes.")
+        self.overview_alerts_var.set("Alertas operacionais: atualize o dashboard para gerar os alertas.")
 
     def _build_ui(self):
-        header_txt = "Dashboard APS - Atual x Anterior + Comparador Manual"
-        if self.mode != "legacy":
-            header_txt = "Dashboard APS v2 - Operacao e Prioridades"
+        header_txt = "Dashboard APS v2 - Operacao e Prioridades"
         header = tk.Label(self, text=header_txt, bg="#1F4E79", fg="white", font=("Segoe UI", 16, "bold"), pady=12)
         header.pack(fill="x")
 
@@ -440,15 +516,13 @@ class APSDashboard(tk.Toplevel):
         self.tab_compare = ScrollableTab(self.notebook)
         self.tab_folders = ScrollableTab(self.notebook)
         self.notebook.add(self.tab_overview, text="Panorama")
-        if self.mode != "legacy":
-            self.tab_actions = ScrollableTab(self.notebook)
-            self.notebook.add(self.tab_actions, text="Painel de acao")
+        self.tab_actions = ScrollableTab(self.notebook)
+        self.notebook.add(self.tab_actions, text="Painel de acao")
         self.notebook.add(self.tab_compare, text="Comparar arquivos")
         self.notebook.add(self.tab_folders, text="Comparar pastas")
 
         self._build_overview_tab(self.tab_overview.inner)
-        if self.mode != "legacy":
-            self._build_actions_tab(self.tab_actions.inner)
+        self._build_actions_tab(self.tab_actions.inner)
         self._build_compare_tab(self.tab_compare.inner)
         self._build_folders_tab(self.tab_folders.inner)
 
@@ -456,8 +530,6 @@ class APSDashboard(tk.Toplevel):
         top = ttk.Frame(root)
         top.pack(fill="x", padx=4, pady=10)
         ttk.Button(top, text="Atualizar", command=self.refresh).pack(side="left")
-        toggle_txt = "Abrir modo legacy" if self.mode != "legacy" else "Abrir modo v2"
-        ttk.Button(top, text=toggle_txt, command=self._toggle_mode).pack(side="left", padx=(8, 0))
         ttk.Button(top, text="Exportar relatorio PDF", command=self.exportar_relatorio_pdf).pack(side="left", padx=(8,0))
 
         # Seletor de pasta
@@ -486,9 +558,16 @@ class APSDashboard(tk.Toplevel):
         self._make_card(cards, "Pacientes brutos", self.card_vars["linhas_brutas"], 1)
         self._make_card(cards, "Pacientes unicos", self.card_vars["linhas"], 2)
         self._make_card(cards, "Busca ativa atual", self.card_vars["busca"], 3)
-        self._make_card(cards, "Media atual", self.card_vars["media"], 4)
-        self._make_card(cards, "Variacao media vs anterior", self.card_vars["delta"], 5)
-        self._make_card(cards, "Variacao busca ativa", self.card_vars["delta_busca"], 6)
+        self._make_card(cards, "Critico (0 pts)", self.card_vars["critico_zero"], 4)
+        self._make_card(cards, "Media atual", self.card_vars["media"], 5)
+        self._make_card(cards, "Variacao media vs anterior", self.card_vars["delta"], 6)
+        self._make_card(cards, "Variacao busca ativa", self.card_vars["delta_busca"], 7)
+        self._make_card(cards, "Apraz total", self.card_vars["ap_total"], 8)
+        self._make_card(cards, "Apraz vencido", self.card_vars["ap_vencido"], 9)
+        self._make_card(cards, "Apraz alerta", self.card_vars["ap_alerta"], 10)
+
+        self._build_score_legend(root)
+        self._build_overview_alerts(root)
 
         body = ttk.Frame(root)
         body.pack(fill="both", expand=True, padx=4, pady=12)
@@ -505,7 +584,7 @@ class APSDashboard(tk.Toplevel):
         current_box.grid(row=0, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
         current_box.rowconfigure(0, weight=1)
         current_box.columnconfigure(0, weight=1)
-        cur_cols = ("Indicador", "Total", "Busca Ativa", "Media Pontuacao", "Otimo", "Bom", "Suficiente", "Regular", "Ruim", "Critico")
+        cur_cols = ("Indicador", "Total", "Busca Ativa", "Media Pontuacao", "Otimo", "Bom", "Suficiente", "Regular")
         self.tree_current = ttk.Treeview(current_box, columns=cur_cols, show="headings", height=6)
         for c in cur_cols:
             self.tree_current.heading(c, text=c)
@@ -515,12 +594,13 @@ class APSDashboard(tk.Toplevel):
         sc1 = ttk.Scrollbar(current_box, orient="vertical", command=self.tree_current.yview)
         sc1.grid(row=0, column=1, sticky="ns")
         self.tree_current.configure(yscrollcommand=sc1.set)
+        self.tree_current.bind("<<TreeviewSelect>>", self._on_current_indicator_select)
 
         compare_box = ttk.LabelFrame(body, text="Comparativo atual x anterior")
         compare_box.grid(row=1, column=0, columnspan=2, sticky="nsew", pady=(0, 10))
         compare_box.rowconfigure(0, weight=1)
         compare_box.columnconfigure(0, weight=1)
-        cmp_cols = ("Indicador", "Atual", "Anterior", "Variacao  Media", "Variacao  Total", "Variacao  Busca Ativa", "Variacao  Otimo", "Variacao  Bom", "Variacao  Suficiente", "Variacao  Regular", "Variacao  Ruim", "Variacao  Critico")
+        cmp_cols = ("Indicador", "Atual", "Anterior", "Variacao  Media", "Variacao  Total", "Variacao  Busca Ativa", "Variacao  Otimo", "Variacao  Bom", "Variacao  Suficiente", "Variacao  Regular")
         self.tree_compare = ttk.Treeview(compare_box, columns=cmp_cols, show="headings", height=6)
         for c in cmp_cols:
             self.tree_compare.heading(c, text=c)
@@ -565,11 +645,42 @@ class APSDashboard(tk.Toplevel):
         ent = ttk.Entry(top, textvariable=self.action_filter_var, width=32)
         ent.pack(side="left", padx=(6, 10))
         ent.bind("<KeyRelease>", lambda _e: self._refresh_actions_view())
+        ttk.Label(top, text="Classe:").pack(side="left", padx=(0, 4))
+        cbo_class = ttk.Combobox(
+            top,
+            textvariable=self.action_class_filter_var,
+            state="readonly",
+            width=12,
+            values=("TODAS", "Otimo", "Bom", "Suficiente", "Regular"),
+        )
+        cbo_class.pack(side="left", padx=(0, 8))
+        cbo_class.bind("<<ComboboxSelected>>", lambda _e: self._refresh_actions_view())
+        ttk.Label(top, text="Prioridade:").pack(side="left", padx=(0, 4))
+        cbo_prio = ttk.Combobox(
+            top,
+            textvariable=self.action_priority_filter_var,
+            state="readonly",
+            width=12,
+            values=("TODAS", "URGENTE", "ALTA", "MONITORAR", "CONCLUIDO"),
+        )
+        cbo_prio.pack(side="left", padx=(0, 8))
+        cbo_prio.bind("<<ComboboxSelected>>", lambda _e: self._refresh_actions_view())
+        ttk.Label(top, text="Indicador:").pack(side="left", padx=(0, 4))
+        self.cbo_action_indicator = ttk.Combobox(
+            top,
+            textvariable=self.action_indicator_filter_var,
+            state="readonly",
+            width=10,
+            values=("TODOS",),
+        )
+        self.cbo_action_indicator.pack(side="left", padx=(0, 8))
+        self.cbo_action_indicator.bind("<<ComboboxSelected>>", lambda _e: self._refresh_actions_view())
         ttk.Label(top, text="Ordenar:").pack(side="left")
         cbo = ttk.Combobox(top, textvariable=self.action_sort_var, state="readonly", width=14, values=("Urgencia", "Pontuacao", "Pendencias", "Alfabetica"))
         cbo.pack(side="left", padx=(6, 8))
         cbo.bind("<<ComboboxSelected>>", lambda _e: self._refresh_actions_view())
         ttk.Checkbutton(top, text="Modo simples", variable=self.action_simple_mode_var, command=self._refresh_actions_view).pack(side="left", padx=(6, 0))
+        ttk.Button(top, text="Exportar operacional", command=self.export_operational_report).pack(side="right", padx=(8, 0))
         ttk.Button(top, text="Carregar painel", command=self._load_action_data).pack(side="right")
 
         src = ttk.Frame(root)
@@ -598,11 +709,12 @@ class APSDashboard(tk.Toplevel):
         box.grid(row=0, column=0, rowspan=2, sticky="nsew", padx=(0, 6))
         box.columnconfigure(0, weight=1)
         box.rowconfigure(0, weight=1)
-        cols = ("Prioridade", "Nome", "Bairro", "Pendencias", "Media", "Indicadores", "O que fazer")
+        cols = ("Prioridade", "Classificacao", "Nome", "Bairro", "Pendencias", "Media", "Indicadores", "O que fazer")
         self.tree_actions = ttk.Treeview(box, columns=cols, show="headings", height=18)
         for c in cols:
             self.tree_actions.heading(c, text=c)
             self.tree_actions.column(c, width=120, anchor="center")
+        self.tree_actions.column("Classificacao", width=105, anchor="center")
         self.tree_actions.column("Nome", width=240, anchor="w")
         self.tree_actions.column("O que fazer", width=280, anchor="w")
         self.tree_actions.tag_configure("prio_urgente", background="#FDECEA")
@@ -674,11 +786,6 @@ class APSDashboard(tk.Toplevel):
             self.overview_body.rowconfigure(3, weight=1)
             self.overview_body.rowconfigure(4, weight=0)
 
-    def _toggle_mode(self):
-        target = "legacy" if self.mode != "legacy" else "v2"
-        launch_dashboard(self.results_dir, mode=target)
-        self.destroy()
-
     def _resolve_action_source_files(self) -> list[Path]:
         if self.action_source_mode.get() == "arquivos" and self.action_selected_files:
             out = []
@@ -707,8 +814,14 @@ class APSDashboard(tk.Toplevel):
 
     def _load_action_data(self, silent: bool = False):
         paths = self._resolve_action_source_files()
+        indicator_values = ["TODOS"] + sorted({str(infer_indicator_code_from_path(p) or "").upper() for p in paths if infer_indicator_code_from_path(p)})
+        if hasattr(self, "cbo_action_indicator"):
+            self.cbo_action_indicator["values"] = tuple(indicator_values)
+            if self.action_indicator_filter_var.get().strip().upper() not in indicator_values:
+                self.action_indicator_filter_var.set("TODOS")
         if not paths:
             self.unified_df = pd.DataFrame()
+            self.action_view_df = pd.DataFrame()
             self._refresh_actions_view()
             if not silent:
                 messagebox.showwarning("Sem arquivos", "Nao encontrei planilhas para montar o painel.")
@@ -718,6 +831,7 @@ class APSDashboard(tk.Toplevel):
             raw = build_unified(paths)
             if raw is None or raw.empty:
                 self.unified_df = pd.DataFrame()
+                self.action_view_df = pd.DataFrame()
                 self._refresh_actions_view()
                 if not silent:
                     messagebox.showwarning("Sem dados", "Nao foi possivel montar dados com os arquivos selecionados.")
@@ -758,6 +872,9 @@ class APSDashboard(tk.Toplevel):
         txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii")
         txt = re.sub(r"[^a-z0-9]+", "", txt)
         return txt
+
+    def _extract_indicator_codes(self, value: str) -> list[str]:
+        return sorted(set(re.findall(r"C\d+", str(value or "").upper())))
 
     def _norm_bairro(self, value: str) -> str:
         txt = str(value or "").strip()
@@ -892,22 +1009,21 @@ class APSDashboard(tk.Toplevel):
     def _priority_distribution_from_latest(self) -> dict[str, int]:
         out = {"URGENTE": 0, "ALTA": 0, "MONITORAR": 0, "CONCLUIDO": 0}
         # Regra principal: distribuicao por paciente unico (sem duplicar entre C1..C7).
-        if self.mode != "legacy":
-            try:
-                base_df = self.unified_df
-                if base_df is None or base_df.empty:
-                    from aps_comparador_paciente import build_unified
-                    paths = self._resolve_action_source_files()
-                    if paths:
-                        raw = build_unified(paths)
-                        base_df = self._prepare_unified_df(raw)
-                if base_df is not None and not base_df.empty and "prioridade" in base_df.columns:
-                    prios = base_df["prioridade"].astype(str).apply(self._norm_prio)
-                    for p in prios:
-                        out[p] = out.get(p, 0) + 1
-                    return out
-            except Exception:
-                pass
+        try:
+            base_df = self.unified_df
+            if base_df is None or base_df.empty:
+                from aps_comparador_paciente import build_unified
+                paths = self._resolve_action_source_files()
+                if paths:
+                    raw = build_unified(paths)
+                    base_df = self._prepare_unified_df(raw)
+            if base_df is not None and not base_df.empty and "prioridade" in base_df.columns:
+                prios = base_df["prioridade"].astype(str).apply(self._norm_prio)
+                for p in prios:
+                    out[p] = out.get(p, 0) + 1
+                return out
+        except Exception:
+            pass
 
         # Fallback: por linhas das planilhas (pode duplicar pacientes).
         grouped = indicator_files(self.results_dir)
@@ -1023,8 +1139,6 @@ class APSDashboard(tk.Toplevel):
             "Bom": "#F28E2B",
             "Suficiente": "#2CA02C",
             "Regular": "#D62728",
-            "Ruim": "#9467BD",
-            "Critico": "#8C564B",
         }
         bottom_a = [0] * len(codes)
         bottom_b = [0] * len(codes)
@@ -1145,12 +1259,13 @@ class APSDashboard(tk.Toplevel):
         return work.sort_values(["_prio_ord", "_pend_num", "_media_num", "nome"], ascending=[True, False, True, True])
 
     def _refresh_actions_view(self):
-        if self.mode == "legacy" or not hasattr(self, "tree_actions"):
+        if not hasattr(self, "tree_actions"):
             return
         for item in self.tree_actions.get_children():
             self.tree_actions.delete(item)
         self._action_row_map = {}
         if self.unified_df.empty:
+            self.action_view_df = pd.DataFrame()
             self.action_status_var.set("Sem dados carregados. Selecione pasta ou arquivos.")
             for key in self.action_card_vars:
                 self.action_card_vars[key].set("0" if key != "media" else "0.0")
@@ -1162,10 +1277,13 @@ class APSDashboard(tk.Toplevel):
             return
 
         df = self.unified_df.copy()
+        df["_media_num"] = pd.to_numeric(df.get("media"), errors="coerce").fillna(0)
+        df["_class"] = df["_media_num"].apply(self._class_from_media)
+        df["_prio_norm"] = df.get("prioridade", pd.Series(dtype=str)).astype(str).apply(self._norm_prio)
         if self.action_simple_mode_var.get():
-            self.tree_actions.configure(displaycolumns=("Prioridade", "Nome", "Bairro", "O que fazer"))
+            self.tree_actions.configure(displaycolumns=("Prioridade", "Classificacao", "Nome", "Bairro", "O que fazer"))
         else:
-            self.tree_actions.configure(displaycolumns=("Prioridade", "Nome", "Bairro", "Pendencias", "Media", "Indicadores", "O que fazer"))
+            self.tree_actions.configure(displaycolumns=("Prioridade", "Classificacao", "Nome", "Bairro", "Pendencias", "Media", "Indicadores", "O que fazer"))
         filtro_raw = self.action_filter_var.get().strip()
         filtro = self._nkey(filtro_raw)
         if filtro:
@@ -1176,22 +1294,33 @@ class APSDashboard(tk.Toplevel):
                 | df.get("oqf", "").astype(str).apply(lambda v: filtro in self._nkey(v))
             )
             df = df[mask]
+        class_filter = self.action_class_filter_var.get().strip().upper()
+        if class_filter and class_filter != "TODAS":
+            df = df[df["_class"].astype(str).str.upper() == class_filter]
+        prio_filter = self.action_priority_filter_var.get().strip().upper()
+        if prio_filter and prio_filter != "TODAS":
+            df = df[df["_prio_norm"].astype(str).str.upper() == prio_filter]
+        ind_filter = self.action_indicator_filter_var.get().strip().upper()
+        if ind_filter and ind_filter != "TODOS":
+            df = df[df.get("indicadores", "").astype(str).str.contains(rf"\b{re.escape(ind_filter)}\b", case=False, na=False)]
         df = self._sort_action_df(df)
+        self.action_view_df = df.copy()
 
-        prios = df.get("prioridade", pd.Series(dtype=str)).astype(str).apply(self._norm_prio)
+        prios = df["_prio_norm"]
         self.action_card_vars["total"].set(str(len(df)))
         self.action_card_vars["urgente"].set(str(int((prios == "URGENTE").sum())))
         self.action_card_vars["alta"].set(str(int((prios == "ALTA").sum())))
         self.action_card_vars["monitorar"].set(str(int((prios == "MONITORAR").sum())))
         self.action_card_vars["concluido"].set(str(int((prios == "CONCLUIDO").sum())))
-        media = pd.to_numeric(df.get("media"), errors="coerce")
-        media_val = float(media.fillna(0).mean() if len(media) else 0)
+        media = df["_media_num"]
+        media_val = float(media.mean() if len(media) else 0)
         self.action_card_vars["media"].set(f"{media_val:.1f}")
         urg = int((prios == "URGENTE").sum())
         alta = int((prios == "ALTA").sum())
-        busca = int((pd.to_numeric(df.get("media"), errors="coerce").fillna(0) < 100).sum())
+        busca = int((df["_media_num"] < 100).sum())
+        zero_pts = int((df["_media_num"] == 0).sum())
         self.action_insights_var.set(
-            f"Leitura rapida | Urgentes: {urg} | Altas: {alta} | Busca ativa: {busca} | Media geral: {media_val:.1f}"
+            f"Leitura rapida | Urgentes: {urg} | Altas: {alta} | Busca ativa: {busca} | Critico (0): {zero_pts} | Media geral: {media_val:.1f}"
         )
 
         top_limit = 180 if self.action_simple_mode_var.get() else 300
@@ -1207,6 +1336,7 @@ class APSDashboard(tk.Toplevel):
             }.get(prio_norm, "prio_monitorar")
             self.tree_actions.insert("", "end", iid=iid, values=(
                 prio_norm,
+                row.get("_class", ""),
                 row.get("nome", ""),
                 row.get("bairro", ""),
                 row.get("pendencias", ""),
@@ -1268,13 +1398,14 @@ class APSDashboard(tk.Toplevel):
         nome = str(row.get("nome", "")).strip()
         bairro = str(row.get("bairro", "")).strip()
         prio = self._norm_prio(row.get("prioridade", ""))
+        classe = str(row.get("_class", "")).strip() or self._class_from_media(row.get("media", 0))
         media = str(row.get("media", "")).strip()
         pend = str(row.get("pendencias", "")).strip()
         inds = str(row.get("indicadores", "")).strip()
         oqf = str(row.get("oqf", "")).strip().replace("\n", " | ")
         self.action_patient_detail_var.set(
             f"{nome}\n"
-            f"Bairro: {bairro or 'SEM BAIRRO'} | Prioridade: {prio}\n"
+            f"Bairro: {bairro or 'SEM BAIRRO'} | Prioridade: {prio} | Classificacao: {classe}\n"
             f"Media: {media} | Pendencias: {pend}\n"
             f"Indicadores: {inds}\n"
             f"Acao: {oqf}"
@@ -1355,7 +1486,7 @@ class APSDashboard(tk.Toplevel):
         self._auto_refresh_after_id = None
         if not self.winfo_exists():
             return
-        if self.mode == "legacy" or not hasattr(self, "tree_actions"):
+        if not hasattr(self, "tree_actions"):
             self._schedule_auto_unified_refresh()
             return
         now_sig = self._current_indicator_signature()
@@ -1459,6 +1590,42 @@ class APSDashboard(tk.Toplevel):
         tk.Label(frame, textvariable=var, bg="#DCE6F1", fg="#1F4E79", font=("Segoe UI", 18, "bold")).pack(anchor="w", padx=12, pady=(0, 10))
         return var
 
+    def _build_score_legend(self, root):
+        legend = ttk.LabelFrame(root, text="Legenda de pontuacao e cores")
+        legend.pack(fill="x", padx=4, pady=(0, 8))
+        tk.Label(
+            legend,
+            text="Classificacao oficial em 4 niveis + destaque operacional para 0 ponto:",
+            bg="#F4F8FB",
+            fg="#1F1F1F",
+            font=("Segoe UI", 9),
+            anchor="w",
+        ).pack(fill="x", padx=8, pady=(6, 4))
+        row = tk.Frame(legend, bg="#F4F8FB")
+        row.pack(fill="x", padx=8, pady=(0, 8))
+        for idx, (label, faixa, color) in enumerate(SCORE_LEGEND):
+            item = tk.Frame(row, bg="#F4F8FB")
+            item.grid(row=0, column=idx, sticky="w", padx=(0, 12))
+            tk.Label(item, width=2, bg=color, relief="solid", bd=1).pack(side="left", padx=(0, 6))
+            tk.Label(item, text=f"{label}: {faixa}", bg="#F4F8FB", fg="#1F1F1F", font=("Segoe UI", 9)).pack(side="left")
+        for idx in range(len(SCORE_LEGEND)):
+            row.columnconfigure(idx, weight=1)
+
+    def _build_overview_alerts(self, root):
+        box = ttk.LabelFrame(root, text="Alertas operacionais")
+        box.pack(fill="x", padx=4, pady=(0, 8))
+        ttk.Label(box, textvariable=self.overview_alerts_var, anchor="w", justify="left").pack(fill="x", padx=8, pady=8)
+
+    def _class_from_media(self, value) -> str:
+        pts = pd.to_numeric(pd.Series([value]), errors="coerce").fillna(0).iloc[0]
+        if pts > 75:
+            return "Otimo"
+        if pts > 50:
+            return "Bom"
+        if pts > 25:
+            return "Suficiente"
+        return "Regular"
+
     def _change_folder(self):
         folder = filedialog.askdirectory(
             title="Selecione a pasta com os resultados APS",
@@ -1467,6 +1634,56 @@ class APSDashboard(tk.Toplevel):
             self.results_dir = Path(folder)
             self.folder_var.set(folder)
             self.refresh()
+
+    def _on_current_indicator_select(self, _evt=None):
+        sel = self.tree_current.selection()
+        if not sel:
+            return
+        code = str(sel[0]).strip().upper()
+        if not re.fullmatch(r"C\d+", code):
+            return
+        self.action_indicator_filter_var.set(code)
+        if self.unified_df is None or self.unified_df.empty:
+            self._load_action_data(silent=True)
+        self._refresh_actions_view()
+        try:
+            self.notebook.select(self.tab_actions)
+        except Exception:
+            pass
+        self.action_status_var.set(f"Filtro aplicado via panorama: {code}.")
+
+    def _refresh_overview_alerts(self):
+        if self.summary_df is None or self.summary_df.empty:
+            self.overview_alerts_var.set("Alertas operacionais: sem dados carregados.")
+            return
+        lines: list[str] = []
+
+        crit = int(pd.to_numeric(self.summary_df.get("Critico0"), errors="coerce").fillna(0).sum())
+        lines.append(f"Pacientes criticos (0 pts): {crit}")
+
+        if self.compare_df is not None and not self.compare_df.empty:
+            d_media = pd.to_numeric(self.compare_df.get("Variacao  Media"), errors="coerce")
+            d_busca = pd.to_numeric(self.compare_df.get("Variacao  Busca Ativa"), errors="coerce")
+            if not d_media.dropna().empty:
+                worst_idx = d_media.fillna(0).idxmin()
+                worst_row = self.compare_df.loc[worst_idx]
+                worst_lbl = str(worst_row.get("Indicador Label", worst_row.get("Indicador", "-")))
+                worst_val = float(pd.to_numeric(pd.Series([d_media.loc[worst_idx]]), errors="coerce").fillna(0).iloc[0])
+                lines.append(f"Maior queda de media: {worst_lbl} ({worst_val:+.1f})")
+            pos_busca = self.compare_df[d_busca > 0] if d_busca is not None else pd.DataFrame()
+            if pos_busca is not None and not pos_busca.empty:
+                top_busca = pos_busca.sort_values("Variacao  Busca Ativa", ascending=False).iloc[0]
+                b_lbl = str(top_busca.get("Indicador Label", top_busca.get("Indicador", "-")))
+                b_val = int(pd.to_numeric(pd.Series([top_busca.get("Variacao  Busca Ativa", 0)]), errors="coerce").fillna(0).iloc[0])
+                lines.append(f"Aumento de busca ativa: {b_lbl} (+{b_val})")
+
+        bairros = self._risk_by_bairro_from_latest()
+        if bairros is not None and not bairros.empty:
+            top_bairro = str(bairros.index[0])
+            top_risk = int(float(bairros.iloc[0]))
+            lines.append(f"Bairro com maior risco: {top_bairro} (score {top_risk})")
+
+        self.overview_alerts_var.set("\n".join(lines) if lines else "Alertas operacionais: sem achados relevantes.")
 
     def refresh(self):
         current_folder = Path(self.folder_var.get().strip() or self.results_dir)
@@ -1478,10 +1695,15 @@ class APSDashboard(tk.Toplevel):
         if self.indicator_var.get() not in codes and codes:
             self.indicator_var.set(codes[0])
 
-        self.summary_df = build_current_summary(self.results_dir)
-        self.compare_df = build_comparison_summary(self.results_dir)
-        if self.mode != "legacy":
-            self._load_action_data(silent=True)
+        warnings: list[str] = []
+        self.summary_df = build_current_summary(self.results_dir, warnings=warnings)
+        self.compare_df = build_comparison_summary(self.results_dir, warnings=warnings)
+        ap_summary = load_aprazamento_summary(self.results_dir)
+        self.card_vars["ap_total"].set(str(ap_summary["total"]))
+        self.card_vars["ap_vencido"].set(str(ap_summary["vencido"]))
+        self.card_vars["ap_alerta"].set(str(ap_summary["vermelho"] + ap_summary["amarelo"]))
+        self._refresh_warnings = warnings
+        self._load_action_data(silent=True)
 
         for tree in (self.tree_current, self.tree_compare):
             for item in tree.get_children():
@@ -1489,7 +1711,7 @@ class APSDashboard(tk.Toplevel):
 
         if self.summary_df.empty:
             self._layout_overview_charts(folder_compare_mode=False)
-            for key, value in [("arquivos", "0"), ("linhas_brutas", "0"), ("linhas", "0"), ("busca", "0"), ("media", "0.0"), ("delta", "0.0"), ("delta_busca", "0")]:
+            for key, value in [("arquivos", "0"), ("linhas_brutas", "0"), ("linhas", "0"), ("busca", "0"), ("critico_zero", "0"), ("media", "0.0"), ("delta", "0.0"), ("delta_busca", "0")]:
                 self.card_vars[key].set(value)
             for ax, canvas, title in [
                 (self.ax1, self.canvas1, "Sem dados"),
@@ -1498,26 +1720,35 @@ class APSDashboard(tk.Toplevel):
                 (self.ax4, self.canvas4, "Sem dados"),
             ]:
                 ax.clear(); ax.set_title(title); canvas.draw()
-            if self.mode != "legacy":
-                self._refresh_actions_view()
-            self.status_var.set("Sem dados na pasta selecionada.")
+            self._refresh_actions_view()
+            msg = "Sem dados na pasta selecionada."
+            if warnings:
+                msg = f"{msg} {len(warnings)} arquivo(s) ignorado(s)."
+            self.status_var.set(msg)
+            self._refresh_overview_alerts()
             return
 
         for _, row in self.summary_df.iterrows():
-            self.tree_current.insert("", "end", values=(
+            row_code = str(row.get("Indicador", "")).strip().upper()
+            values = (
                 row.get("Indicador Label", row.get("Indicador")), row.get("Total"), row.get("Busca Ativa"), row.get("Media Pontuacao"),
-                row.get("Otimo", 0), row.get("Bom", 0), row.get("Suficiente", 0), row.get("Regular", 0), row.get("Ruim", 0), row.get("Critico", 0)
-            ))
+                row.get("Otimo", 0), row.get("Bom", 0), row.get("Suficiente", 0), row.get("Regular", 0)
+            )
+            if re.fullmatch(r"C\d+", row_code):
+                self.tree_current.insert("", "end", iid=row_code, values=values)
+            else:
+                self.tree_current.insert("", "end", values=values)
 
         if not self.compare_df.empty:
             for _, row in self.compare_df.iterrows():
-                vals = [row.get("Indicador Label", row.get("Indicador"))] + [row.get(c) for c in ["Atual", "Anterior", "Variacao  Media", "Variacao  Total", "Variacao  Busca Ativa", "Variacao  Otimo", "Variacao  Bom", "Variacao  Suficiente", "Variacao  Regular", "Variacao  Ruim", "Variacao  Critico"]]
+                vals = [row.get("Indicador Label", row.get("Indicador"))] + [row.get(c) for c in ["Atual", "Anterior", "Variacao  Media", "Variacao  Total", "Variacao  Busca Ativa", "Variacao  Otimo", "Variacao  Bom", "Variacao  Suficiente", "Variacao  Regular"]]
                 self.tree_compare.insert("", "end", values=tuple("-" if pd.isna(v) else v for v in vals))
 
         self.card_vars["arquivos"].set(str(len(self.summary_df)))
         self.card_vars["linhas_brutas"].set(str(int(self.summary_df["Total"].sum())))
         self.card_vars["linhas"].set(str(count_unique_patients_latest(self.results_dir)))
         self.card_vars["busca"].set(str(int(self.summary_df["Busca Ativa"].sum())))
+        self.card_vars["critico_zero"].set(str(int(pd.to_numeric(self.summary_df.get("Critico0"), errors="coerce").fillna(0).sum())))
         self.card_vars["media"].set(f"{self.summary_df['Media Pontuacao'].mean():.1f}")
 
         valid_delta = pd.to_numeric(self.compare_df.get("Variacao  Media"), errors="coerce") if not self.compare_df.empty else pd.Series(dtype=float)
@@ -1528,9 +1759,12 @@ class APSDashboard(tk.Toplevel):
         self.card_vars["delta_busca"].set(f"{delta_busca:+d}")
 
         self._refresh_overview_charts()
-        if self.mode != "legacy":
-            self._refresh_actions_view()
-        self.status_var.set(f"Panorama atualizado com {len(self.summary_df)} indicador(es).")
+        self._refresh_overview_alerts()
+        self._refresh_actions_view()
+        msg = f"Panorama atualizado com {len(self.summary_df)} indicador(es)."
+        if warnings:
+            msg = f"{msg} {len(warnings)} arquivo(s) ignorado(s)."
+        self.status_var.set(msg)
         self._schedule_auto_unified_refresh()
 
     def _refresh_overview_charts(self):
@@ -1579,7 +1813,7 @@ class APSDashboard(tk.Toplevel):
 
         # Risco por bairro visivel mesmo sem carregar o painel de acao.
         borough = pd.Series(dtype=float)
-        if self.mode != "legacy" and self.unified_df is not None and not self.unified_df.empty:
+        if self.unified_df is not None and not self.unified_df.empty:
             risk_df = self.unified_df.copy()
             risk_df["_prio"] = risk_df["prioridade"].astype(str).apply(self._norm_prio)
             risk_df["_score"] = risk_df["_prio"].map({"URGENTE": 3, "ALTA": 2, "MONITORAR": 1, "CONCLUIDO": 0}).fillna(0)
@@ -1630,10 +1864,6 @@ class APSDashboard(tk.Toplevel):
             return "Suficiente"
         if "regular" in base:
             return "Regular"
-        if "ruim" in base:
-            return "Ruim"
-        if "critico" in base:
-            return "Critico"
         return "Regular"
 
     def _manual_metrics_by_patient(self, path: Path) -> dict[str, dict]:
@@ -1662,7 +1892,7 @@ class APSDashboard(tk.Toplevel):
         a = self._manual_metrics_by_patient(path_a)
         b = self._manual_metrics_by_patient(path_b)
         common = set(a.keys()) & set(b.keys())
-        class_rank = {"Otimo": 0, "Bom": 1, "Suficiente": 2, "Regular": 3, "Ruim": 4, "Critico": 5}
+        class_rank = {c: i for i, c in enumerate(CLASS_ORDER)}
 
         entered_busca = 0
         left_busca = 0
@@ -1841,6 +2071,83 @@ class APSDashboard(tk.Toplevel):
         except Exception as exc:
             messagebox.showerror("Erro ao exportar", str(exc))
             self.status_compare.set(f"Erro ao exportar: {exc}")
+
+    def export_operational_report(self):
+        try:
+            base_df = self.action_view_df.copy() if self.action_view_df is not None and not self.action_view_df.empty else self.unified_df.copy()
+            if base_df is None or base_df.empty:
+                raise RuntimeError("Carregue o painel operacional antes de exportar.")
+
+            base_df["_media_num"] = pd.to_numeric(base_df.get("media"), errors="coerce").fillna(0)
+            base_df["_class"] = base_df["_media_num"].apply(self._class_from_media)
+            base_df["_prio_norm"] = base_df.get("prioridade", pd.Series(index=base_df.index, dtype=str)).astype(str).apply(self._norm_prio)
+            bcol = base_df.get("bairro", pd.Series(index=base_df.index, dtype=str)).astype(str)
+            base_df["_bairro_norm"] = self._canonicalize_bairro_series(bcol)
+
+            stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            initial_name = f"OPERACIONAL_{stamp}.xlsx"
+            out = filedialog.asksaveasfilename(
+                title="Salvar exportacao operacional",
+                defaultextension=".xlsx",
+                initialdir=str(self.results_dir),
+                initialfile=initial_name,
+                filetypes=[("Excel", "*.xlsx")],
+            )
+            if not out:
+                return
+            out_path = Path(out)
+
+            cols_export = ["nome", "_bairro_norm", "_prio_norm", "_class", "_media_num", "pendencias", "indicadores", "oqf"]
+            work = base_df[cols_export].copy()
+            work = work.rename(
+                columns={
+                    "nome": "Nome",
+                    "_bairro_norm": "Bairro",
+                    "_prio_norm": "Prioridade",
+                    "_class": "Classificacao",
+                    "_media_num": "Pontos",
+                    "pendencias": "Pendencias",
+                    "indicadores": "Indicadores",
+                    "oqf": "Acao",
+                }
+            )
+            work["Pontos"] = work["Pontos"].round(0).astype(int)
+
+            urgentes = work[work["Prioridade"] == "URGENTE"].copy()
+            zero_pts = work[work["Pontos"] == 0].copy()
+            regulares = work[work["Classificacao"] == "Regular"].copy()
+
+            risk_map = {"URGENTE": 3, "ALTA": 2, "MONITORAR": 1, "CONCLUIDO": 0}
+            bairros = work.copy()
+            bairros["_risk"] = bairros["Prioridade"].map(risk_map).fillna(0).astype(int)
+            top_bairros = (
+                bairros.groupby("Bairro", dropna=False)
+                .agg(
+                    Total=("Nome", "count"),
+                    Urgentes=("Prioridade", lambda s: int((s == "URGENTE").sum())),
+                    ZeroPts=("Pontos", lambda s: int((s == 0).sum())),
+                    Regulares=("Classificacao", lambda s: int((s == "Regular").sum())),
+                    ScoreRisco=("_risk", "sum"),
+                )
+                .reset_index()
+                .sort_values(["ScoreRisco", "Urgentes", "ZeroPts", "Total"], ascending=[False, False, False, False])
+            )
+
+            with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
+                work.to_excel(writer, sheet_name="FilaFiltrada", index=False)
+                urgentes.to_excel(writer, sheet_name="Urgentes", index=False)
+                zero_pts.to_excel(writer, sheet_name="ZeroPontos", index=False)
+                regulares.to_excel(writer, sheet_name="Regulares", index=False)
+                top_bairros.to_excel(writer, sheet_name="TopBairros", index=False)
+
+            self.action_status_var.set(f"Exportacao operacional concluida: {out_path.name}")
+            messagebox.showinfo(
+                "Exportacao operacional",
+                f"Arquivo gerado:\n{out_path}\n\n"
+                f"Fila filtrada: {len(work)}\nUrgentes: {len(urgentes)}\n0 pontos: {len(zero_pts)}\nRegulares: {len(regulares)}",
+            )
+        except Exception as exc:
+            messagebox.showerror("Erro ao exportar operacional", str(exc))
 
 
 
@@ -2108,7 +2415,8 @@ class APSDashboard(tk.Toplevel):
                 f"<b>Leitura rapida:</b> Media geral: <b>{self.card_vars['media'].get()}</b> "
                 f"(variacao {delta_media_val:+.1f} - {status_media}). "
                 f"Busca ativa: <b>{self.card_vars['busca'].get()}</b> "
-                f"(variacao {int(delta_busca_val):+d} - {status_busca})."
+                f"(variacao {int(delta_busca_val):+d} - {status_busca}). "
+                f"Critico operacional (0 pts): <b>{self.card_vars['critico_zero'].get()}</b>."
             )
             story.append(Paragraph(resumo_text, styles["APSBody"]))
             story.append(Spacer(1, 0.15 * cm))
@@ -2118,6 +2426,7 @@ class APSDashboard(tk.Toplevel):
                 "Pacientes brutos": self.card_vars["linhas_brutas"].get(),
                 "Pacientes unicos": self.card_vars["linhas"].get(),
                 "Busca ativa atual": self.card_vars["busca"].get(),
+                "Critico (0 pts)": self.card_vars["critico_zero"].get(),
                 "Media atual": self.card_vars["media"].get(),
                 "Variacao media vs anterior": f"{delta_media_val:+.1f}",
                 "Variacao busca ativa": f"{int(delta_busca_val):+d}",
@@ -2400,7 +2709,7 @@ class APSDashboard(tk.Toplevel):
             tree.insert("", "end", values=tuple(row[c] for c in cols))
 
 
-def launch_dashboard(results_dir: Path | None = None, mode: str | None = None):
+def launch_dashboard(results_dir: Path | None = None):
     results_dir = Path(results_dir or (Path.home() / "Desktop" / "APS_RESULTADOS"))
     if not results_dir.exists():
         raise FileNotFoundError(f"Pasta de resultados nao encontrada: {results_dir}")
@@ -2409,28 +2718,20 @@ def launch_dashboard(results_dir: Path | None = None, mode: str | None = None):
     if root is None:
         root = tk.Tk()
         root.withdraw()
-    mode = (mode or os.environ.get("APS_DASHBOARD_MODE", "v2")).strip().lower()
-    if mode not in {"legacy", "v2"}:
-        mode = "v2"
-    win = APSDashboard(root, results_dir, mode=mode)
+    win = APSDashboard(root, results_dir)
     return win
 
 
 def main():
     results_dir = None
-    mode = os.environ.get("APS_DASHBOARD_MODE", "v2")
     for arg in sys.argv[1:]:
         low = str(arg).strip().lower()
-        if low.startswith("--mode="):
-            mode = low.split("=", 1)[1]
-        elif low in {"legacy", "v2"}:
-            mode = low
-        elif not str(arg).startswith("--"):
+        if not str(arg).startswith("--"):
             results_dir = Path(arg)
     root = tk.Tk()
     root.withdraw()
     try:
-        launch_dashboard(results_dir, mode=mode)
+        launch_dashboard(results_dir)
         root.mainloop()
     except Exception as exc:
         messagebox.showerror("Erro", str(exc))
