@@ -110,7 +110,8 @@ def _detect_columns(ws, header_row: int) -> dict:
         "uf": pick("UF", "Estado") or pick_contains("uf", "estado"),
         "cep": pick("CEP", "Codigo Postal") or pick_contains("cep", "codigo postal"),
         "tel1": pick("Telefone celular", "Telefone") or 11,
-        "tel2": pick("Telefone residencial", "Telefone de contato") or 12,
+        "tel2": pick("Telefone residencial") or 12,
+        "tel3": pick("Telefone de contato", "Contato") or 13,
         "pontuacao": pick("Pontuação", "Pontuacao", "PontuaÃ§Ã£o") or pick_contains("pontu"),
         "classif": pick("Classificação", "Classificacao", "ClassificaÃ§Ã£o") or pick_contains("classif"),
         "prioridade": pick("Prioridade"),
@@ -243,6 +244,30 @@ def _compose_endereco(parts: dict) -> str:
         pieces.append(f"CEP {cep}")
     return ", ".join(pieces).strip()
 
+
+def _clean_phone(value) -> str:
+    txt = str(value or "").strip()
+    if not txt:
+        return ""
+    if txt.lower() in {"nan", "none", "-", "na", "n/a"}:
+        return ""
+    return re.sub(r"\s+", " ", txt)
+
+
+def _merge_phones(*values) -> str:
+    out = []
+    seen = set()
+    for value in values:
+        txt = _clean_phone(value)
+        if not txt:
+            continue
+        key = re.sub(r"\D+", "", txt) or txt.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(txt)
+    return " | ".join(out)
+
 def _patients_from_data(ws, header_row: int, cols: dict) -> list[dict]:
     pesos = _weights(cols["criterios"])
     start = header_row + 1
@@ -252,12 +277,15 @@ def _patients_from_data(ws, header_row: int, cols: dict) -> list[dict]:
         if not nome:
             continue
         pts = _score_row(ws, row, cols["criterios"], pesos)
+        tel1 = ws.cell(row, cols["tel1"]).value if cols.get("tel1") else ""
+        tel2 = ws.cell(row, cols["tel2"]).value if cols.get("tel2") else ""
+        tel3 = ws.cell(row, cols["tel3"]).value if cols.get("tel3") else ""
         rec = {
             "row": row,
             "nome": str(nome),
             "bairro": (ws.cell(row, cols["bairro"]).value or "") if cols.get("bairro") else "",
             "endereco": (ws.cell(row, cols["endereco"]).value or "") if cols.get("endereco") else "",
-            "tel": ws.cell(row, cols["tel1"]).value or ws.cell(row, cols["tel2"]).value or "",
+            "tel": _merge_phones(tel1, tel2, tel3),
             "pts": pts,
             "classif": _classify(pts),
             "prio": _priority(pts),
@@ -477,6 +505,148 @@ def _build_summary_sheet(ws, cols: dict, patients: list[dict], code: str):
     ws.freeze_panes = "A9"
 
 
+def _build_stats_sheet(ws, cols: dict, patients: list[dict], code: str):
+    _clear_sheet(ws)
+    ws.sheet_view.showGridLines = False
+
+    total = len(patients)
+    concluidos = sum(1 for p in patients if "CONCL" in str(p.get("prio", "")).upper())
+    busca_ativa = total - concluidos
+    media = (sum(float(p.get("pts", 0) or 0) for p in patients) / total) if total else 0.0
+
+    prios = ["🔴 URGENTE", "🟠 ALTA", "🟡 MONITORAR", "🟢 CONCLUÍDO"]
+    prio_counts = {k: 0 for k in prios}
+    for p in patients:
+        pv = str(p.get("prio", "") or "")
+        for k in prios:
+            if k.split(" ", 1)[1] in pv:
+                prio_counts[k] += 1
+                break
+
+    class_names = ["Ótimo", "Bom", "Suficiente", "Regular"]
+    class_counts = {k: 0 for k in class_names}
+    for p in patients:
+        txt = str(p.get("classif", "") or "")
+        norm = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii").lower()
+        if "otimo" in norm:
+            class_counts["Ótimo"] += 1
+        elif "bom" in norm:
+            class_counts["Bom"] += 1
+        elif "suficiente" in norm:
+            class_counts["Suficiente"] += 1
+        elif "regular" in norm:
+            class_counts["Regular"] += 1
+
+    _merge_title(ws, "A1:J1", f"📈 ESTATÍSTICAS — {code}", "1F4E79", size=13)
+    ws.merge_cells("A2:J2")
+    ws["A2"] = f"Atualizado automaticamente em {datetime.now().strftime('%d/%m/%Y %H:%M')}"
+    ws["A2"].fill = AZUL
+    ws["A2"].alignment = _align("center")
+    ws["A2"].font = _font(color="1F4E79")
+
+    cards = [
+        ("A4:C6", f"TOTAL\n{total}", "D9EAF7", "1F4E79"),
+        ("D4:F6", f"MÉDIA\n{media:.1f}", "EFE3FF", "6A1B9A"),
+        ("G4:H6", f"BUSCA ATIVA\n{busca_ativa}", "FDECEA", "C62828"),
+        ("I4:J6", f"CONCLUÍDOS\n{concluidos}", "EAF7EA", "2E7D32"),
+    ]
+    for rng, txt, bg, fg in cards:
+        _merge_title(ws, rng, txt, bg, fg, 12)
+
+    _merge_title(ws, "A8:E8", "PRIORIDADE", "1F4E79")
+    for cidx, title in enumerate(["Prioridade", "Qtd", "%"], 1):
+        c = ws.cell(9, cidx, title)
+        c.fill = _fill("BDD7EE")
+        c.font = _font(bold=True, color="1F4E79")
+        c.alignment = _align("center")
+        c.border = _border()
+    for ridx, name in enumerate(prios, 10):
+        qty = prio_counts.get(name, 0)
+        pct = qty / total if total else 0
+        vals = [name, qty, pct]
+        for cidx, val in enumerate(vals, 1):
+            c = ws.cell(ridx, cidx, val)
+            c.border = _border()
+            c.alignment = _align("center" if cidx > 1 else "left")
+            c.fill = _fill("F7FAFD")
+        ws.cell(ridx, 3).number_format = "0.0%"
+
+    _merge_title(ws, "F8:J8", "CLASSIFICAÇÃO", "7030A0")
+    for cidx, title in enumerate(["Classificação", "Qtd", "%"], 6):
+        c = ws.cell(9, cidx, title)
+        c.fill = _fill("DCC8F0")
+        c.font = _font(bold=True, color="4A148C")
+        c.alignment = _align("center")
+        c.border = _border()
+    for ridx, name in enumerate(class_names, 10):
+        qty = class_counts.get(name, 0)
+        pct = qty / total if total else 0
+        vals = [name, qty, pct]
+        for off, val in enumerate(vals):
+            c = ws.cell(ridx, 6 + off, val)
+            c.border = _border()
+            c.alignment = _align("center" if off > 0 else "left")
+            c.fill = _fill("FBF8FF")
+        ws.cell(ridx, 8).number_format = "0.0%"
+
+    start = 16
+    _merge_title(ws, f"A{start}:J{start}", "ADESÃO POR CRITÉRIO", "375623")
+    headers = ["Critério", "SIM", "NÃO/PEND", "% SIM", "Barra"]
+    for cidx, title in enumerate(headers, 1):
+        c = ws.cell(start + 1, cidx, title)
+        c.fill = _fill("E2EFDA")
+        c.font = _font(bold=True, color="375623")
+        c.alignment = _align("center")
+        c.border = _border()
+
+    for ridx, (_letter, title, _col) in enumerate(cols["criterios"], start + 2):
+        idx = ridx - (start + 2)
+        sim = 0
+        for p in patients:
+            sts = p.get("statuses", [])
+            if idx < len(sts) and _normalize_status(sts[idx]) == "SIM":
+                sim += 1
+        nao = total - sim
+        pct = sim / total if total else 0.0
+        bar = ("█" * round(pct * 20)) + ("░" * (20 - round(pct * 20)))
+        label = title.split("-", 1)[1].strip() if "-" in title else title
+        vals = [label, sim, nao, pct, bar]
+        for cidx, val in enumerate(vals, 1):
+            c = ws.cell(ridx, cidx, val)
+            c.border = _border()
+            c.alignment = _align("left" if cidx in (1, 5) else "center")
+            c.fill = _fill("F8FBF4")
+            if cidx == 5:
+                c.font = Font(name="Courier New", bold=True, color="2E7D32", size=9)
+        ws.cell(ridx, 4).number_format = "0.0%"
+
+    for idx, width in enumerate([38, 12, 12, 12, 28, 18, 12, 12, 12, 12], 1):
+        ws.column_dimensions[get_column_letter(idx)].width = width
+    ws.freeze_panes = "A10"
+
+
+def _refresh_derived_tabs(wb, ws_data, header_row: int, cols: dict) -> tuple[dict, list[dict], str]:
+    cols = _ensure_support_columns(ws_data, header_row, cols)
+    patients = _update_data_sheet(ws_data, header_row, cols)
+    code_m = re.search(r"C\d+", ws_data.title, re.I)
+    code = code_m.group(0).upper() if code_m else "APS"
+
+    ws_search = next((wb[n] for n in wb.sheetnames if n.startswith("🔍") or n.startswith("ðŸ”") or n.startswith("Busca")), None)
+    if ws_search is None:
+        ws_search = wb.create_sheet("🔍 Busca Ativa")
+    ws_summary = next((wb[n] for n in wb.sheetnames if n.startswith("📊") or n.startswith("ðŸ“Š") or n.startswith("Resumo")), None)
+    if ws_summary is None:
+        ws_summary = wb.create_sheet("📊 Resumo")
+    ws_stats = next((wb[n] for n in wb.sheetnames if n.startswith("📈") or n.startswith("ðŸ“ˆ") or n.startswith("Estat")), None)
+    if ws_stats is None:
+        ws_stats = wb.create_sheet("📈 Estatísticas")
+
+    _build_search_sheet(ws_search, cols, patients)
+    _build_summary_sheet(ws_summary, cols, patients, code)
+    _build_stats_sheet(ws_stats, cols, patients, code)
+    return cols, patients, code
+
+
 # -----------------------------------------------------------------------------
 # NÃºcleo pÃºblico
 # -----------------------------------------------------------------------------
@@ -486,17 +656,9 @@ def refresh_interactive_workbook(path) -> Path:
     path = Path(path)
     wb = load_workbook(path)
     ws_data = next((wb[n] for n in wb.sheetnames if n.startswith("ðŸ“‹ Dados") or n.startswith("Dados")), wb[wb.sheetnames[0]])
-    ws_search = next((wb[n] for n in wb.sheetnames if n.startswith("ðŸ”") or n.startswith("Busca")), None) or wb.create_sheet("ðŸ” Busca Ativa")
-    ws_summary = next((wb[n] for n in wb.sheetnames if n.startswith("ðŸ“Š") or n.startswith("Resumo")), None) or wb.create_sheet("ðŸ“Š Resumo")
-
     header_row = _detect_header(ws_data)
-    cols = _ensure_support_columns(ws_data, header_row, _detect_columns(ws_data, header_row))
-    patients = _update_data_sheet(ws_data, header_row, cols)
-    code_m = re.search(r"C\d+", ws_data.title, re.I)
-    code = code_m.group(0).upper() if code_m else "APS"
-
-    _build_search_sheet(ws_search, cols, patients)
-    _build_summary_sheet(ws_summary, cols, patients, code)
+    cols = _detect_columns(ws_data, header_row)
+    _refresh_derived_tabs(wb, ws_data, header_row, cols)
 
     wb.save(path)
     wb.close()
@@ -1841,12 +2003,9 @@ class EditorPlanilhaApp(tk.Toplevel):
                     ws.cell(row, col).value = value
                     applied_cells += 1
             if not self.unified_mode:
-                cols = _ensure_support_columns(ws, header_row, cols)
-                _update_data_sheet(ws, header_row, cols)
+                _refresh_derived_tabs(wb, ws, header_row, cols)
             wb.save(self.workbook_path)
             wb.close()
-            if not self.unified_mode and not fast_mode:
-                refresh_interactive_workbook(self.workbook_path)
             return applied_cells, backup_ok, fast_mode
 
         def on_ok(result):
