@@ -93,29 +93,37 @@ def _detect_columns(ws, header_row: int) -> dict:
 
     criterios = []
     for title, col in headers.items():
-        if re.match(r"^[A-Za-z]\s*[-â€“]\s+\S", title):
+        if re.match(r"^[A-Za-z]\s*[-–]\s+\S", title):
             criterios.append((title.split("-", 1)[0].strip().upper()[:1], title, col))
     criterios.sort(key=lambda x: x[0])
+
+    phone_cols = []
+    for title, col in headers.items():
+        norm = _norm_header_text(title)
+        if any(k in norm for k in ("telefone", "celular", "contato", "whatsapp")):
+            phone_cols.append(col)
+    phone_cols = list(dict.fromkeys(phone_cols))
 
     return {
         "headers": headers,
         "criterios": criterios,
         "nome": pick("Nome", "Paciente") or 1,
-        "microarea": pick("MicroÃ¡rea", "Microarea") or 6,
+        "microarea": pick("Microárea", "MicroÃ¡rea", "Microarea") or 6,
         "bairro": pick("Bairro", "Bairro/Localidade", "Localidade", "Comunidade") or pick_contains("bairro", "localidade", "comunidade"),
-        "endereco": pick("EndereÃ§o", "Endereco", "Logradouro", "Endereço", "Rua", "Domicilio") or pick_contains("endereco", "ender", "logradouro", "domicilio", "rua", "avenida"),
-        "numero": pick("Numero", "NÃºmero", "NÃºm", "Num") or pick_contains("numero", "num"),
+        "endereco": pick("Endereço", "EndereÃ§o", "Endereco", "Logradouro", "Rua", "Domicilio") or pick_contains("endereco", "ender", "logradouro", "domicilio", "rua", "avenida"),
+        "numero": pick("Número", "NÃºmero", "NÃºm", "Numero", "Num") or pick_contains("numero", "num"),
         "complemento": pick("Complemento", "Comp") or pick_contains("complemento", "comp"),
-        "cidade": pick("Cidade", "MunicÃ­pio", "Municipio") or pick_contains("cidade", "municipio"),
+        "cidade": pick("Cidade", "Município", "MunicÃ­pio", "Municipio") or pick_contains("cidade", "municipio"),
         "uf": pick("UF", "Estado") or pick_contains("uf", "estado"),
         "cep": pick("CEP", "Codigo Postal") or pick_contains("cep", "codigo postal"),
         "tel1": pick("Telefone celular", "Telefone") or 11,
         "tel2": pick("Telefone residencial") or 12,
         "tel3": pick("Telefone de contato", "Contato") or 13,
-        "pontuacao": pick("Pontuação", "Pontuacao", "PontuaÃ§Ã£o") or pick_contains("pontu"),
-        "classif": pick("Classificação", "Classificacao", "ClassificaÃ§Ã£o") or pick_contains("classif"),
+        "phone_cols": phone_cols,
+        "pontuacao": pick("Pontuacao", "Pontuação", "PontuaÃ§Ã£o") or pick_contains("pontu"),
+        "classif": pick("Classificacao", "Classificação", "ClassificaÃ§Ã£o") or pick_contains("classif"),
         "prioridade": pick("Prioridade"),
-        "pendencias": pick("Pendências", "Pendencias", "PendÃªncias") or pick_contains("pend"),
+        "pendencias": pick("Pendencias", "Pendências", "PendÃªncias") or pick_contains("pend"),
     }
 
 
@@ -150,6 +158,20 @@ def _normalize_status(value) -> str:
     return txt
 
 
+def _norm_prio_text(value: str) -> str:
+    txt = str(value or "").strip().upper()
+    txt = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii").upper()
+    if "URGENTE" in txt:
+        return "URGENTE"
+    if "ALTA" in txt:
+        return "ALTA"
+    if "MONITORAR" in txt:
+        return "MONITORAR"
+    if "CONCL" in txt:
+        return "CONCLUIDO"
+    return txt
+
+
 
 def _weights(criterios) -> dict[str, int]:
     n = len(criterios)
@@ -175,7 +197,7 @@ def _score_row(ws, row: int, criterios, pesos: dict[str, int]) -> int:
 
 def _classify(score: float) -> str:
     if score >= 100:
-        return "Ã“timo"
+        return "Otimo"
     if score >= 75:
         return "Bom"
     if score >= 50:
@@ -186,12 +208,12 @@ def _classify(score: float) -> str:
 
 def _priority(score: float) -> str:
     if score >= 100:
-        return "ðŸŸ¢ CONCLUÃDO"
+        return "CONCLUIDO"
     if score >= 75:
-        return "ðŸŸ¡ MONITORAR"
+        return "MONITORAR"
     if score >= 50:
-        return "ðŸŸ  ALTA"
-    return "ðŸ”´ URGENTE"
+        return "ALTA"
+    return "URGENTE"
 
 
 
@@ -277,15 +299,23 @@ def _patients_from_data(ws, header_row: int, cols: dict) -> list[dict]:
         if not nome:
             continue
         pts = _score_row(ws, row, cols["criterios"], pesos)
-        tel1 = ws.cell(row, cols["tel1"]).value if cols.get("tel1") else ""
-        tel2 = ws.cell(row, cols["tel2"]).value if cols.get("tel2") else ""
-        tel3 = ws.cell(row, cols["tel3"]).value if cols.get("tel3") else ""
+        phone_values = []
+        for c in cols.get("phone_cols", []) or []:
+            try:
+                phone_values.append(ws.cell(row, c).value)
+            except Exception:
+                continue
+        if not phone_values:
+            tel1 = ws.cell(row, cols["tel1"]).value if cols.get("tel1") else ""
+            tel2 = ws.cell(row, cols["tel2"]).value if cols.get("tel2") else ""
+            tel3 = ws.cell(row, cols["tel3"]).value if cols.get("tel3") else ""
+            phone_values = [tel1, tel2, tel3]
         rec = {
             "row": row,
             "nome": str(nome),
             "bairro": (ws.cell(row, cols["bairro"]).value or "") if cols.get("bairro") else "",
             "endereco": (ws.cell(row, cols["endereco"]).value or "") if cols.get("endereco") else "",
-            "tel": _merge_phones(tel1, tel2, tel3),
+            "tel": _merge_phones(*phone_values),
             "pts": pts,
             "classif": _classify(pts),
             "prio": _priority(pts),
@@ -358,14 +388,14 @@ def _build_search_sheet(ws, cols: dict, patients: list[dict]):
     hidden_row_col = visible_cols + 1
     ws.sheet_view.showGridLines = False
 
-    _merge_title(ws, f"A1:{get_column_letter(visible_cols)}1", "ðŸ” BUSCA ATIVA â€” Editor APS", "1F4E79", size=13)
+    _merge_title(ws, f"A1:{get_column_letter(visible_cols)}1", "BUSCA ATIVA - Editor APS", "1F4E79", size=13)
     ws.merge_cells(f"A2:{get_column_letter(visible_cols)}2")
     ws["A2"] = f"Total: {len(patients)} | Atualizada em: {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     ws["A2"].fill = AZUL
     ws["A2"].font = _font(color="1F4E79")
     ws["A2"].alignment = _align("center")
 
-    headers = ["Prioridade", "Nome", "Bairro", "Telefone"] + [t for _l, t, _c in criterios] + ["PontuaÃ§Ã£o", "ClassificaÃ§Ã£o", "PendÃªncias"]
+    headers = ["Prioridade", "Nome", "Bairro", "Telefone"] + [t for _l, t, _c in criterios] + ["Pontuacao", "Classificacao", "Pendencias"]
     for c_idx, title in enumerate(headers, 1):
         cell = ws.cell(4, c_idx, title)
         if c_idx <= 4:
@@ -381,14 +411,14 @@ def _build_search_sheet(ws, cols: dict, patients: list[dict]):
         cell.border = _border()
 
     palette = {
-        "ðŸ”´ URGENTE": ("FDECEA", "C62828"),
-        "ðŸŸ  ALTA": ("FFF4E5", "EF6C00"),
-        "ðŸŸ¡ MONITORAR": ("FFFBE6", "9E7D00"),
-        "ðŸŸ¢ CONCLUÃDO": ("EAF7EA", "2E7D32"),
+        "URGENTE": ("FDECEA", "C62828"),
+        "ALTA": ("FFF4E5", "EF6C00"),
+        "MONITORAR": ("FFFBE6", "9E7D00"),
+        "CONCLUIDO": ("EAF7EA", "2E7D32"),
     }
 
     for out_row, p in enumerate(patients, 5):
-        bg, fg = palette[p["prio"]]
+        bg, fg = palette.get(str(p.get("prio", "")).upper(), ("F7FAFD", "1F4E79"))
         values = [p["prio"], p["nome"], p.get("bairro", ""), p["tel"], *p["statuses"], p["pts"], p["classif"], p["pend"]]
         for c_idx, value in enumerate(values, 1):
             cell = ws.cell(out_row, c_idx, value)
@@ -414,13 +444,22 @@ def _build_summary_sheet(ws, cols: dict, patients: list[dict], code: str):
 
     total = len(patients)
     media = sum(p["pts"] for p in patients) / total if total else 0
-    concluidos = sum(1 for p in patients if p["prio"] == "ðŸŸ¢ CONCLUÃDO")
+    concluidos = sum(1 for p in patients if _norm_prio_text(p.get("prio", "")) == "CONCLUIDO")
     pendentes = total - concluidos
-    class_counts = {"Ã“timo": 0, "Bom": 0, "Suficiente": 0, "Regular": 0}
+    class_counts = {"Otimo": 0, "Bom": 0, "Suficiente": 0, "Regular": 0}
     for p in patients:
-        class_counts[p["classif"]] = class_counts.get(p["classif"], 0) + 1
+        c = str(p.get("classif", "") or "")
+        c_norm = unicodedata.normalize("NFKD", c).encode("ascii", "ignore").decode("ascii").lower()
+        if "otimo" in c_norm:
+            class_counts["Otimo"] += 1
+        elif "bom" in c_norm:
+            class_counts["Bom"] += 1
+        elif "suficiente" in c_norm:
+            class_counts["Suficiente"] += 1
+        elif "regular" in c_norm:
+            class_counts["Regular"] += 1
 
-    _merge_title(ws, "A1:H1", f"ðŸ“Š RESUMO â€” {code}", "1F4E79", size=13)
+    _merge_title(ws, "A1:H1", f"RESUMO - {code}", "1F4E79", size=13)
     ws.merge_cells("A2:H2")
     ws["A2"] = f"Atualizado automaticamente em {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     ws["A2"].fill = AZUL
@@ -428,16 +467,16 @@ def _build_summary_sheet(ws, cols: dict, patients: list[dict], code: str):
     ws["A2"].font = _font(color="1F4E79")
 
     cards = [
-        ("A4:B6", f"ðŸ‘¥ TOTAL\n{total}", "D9EAF7", "1F4E79"),
-        ("C4:D6", f"ðŸ“Š MÃ‰DIA\n{media:.1f}", "EFE3FF", "6A1B9A"),
-        ("E4:F6", f"âœ… CONCLUÃDOS\n{concluidos}", "EAF7EA", "2E7D32"),
-        ("G4:H6", f"ðŸ” PENDENTES\n{pendentes}", "FDECEA", "C62828"),
+        ("A4:B6", f"TOTAL\n{total}", "D9EAF7", "1F4E79"),
+        ("C4:D6", f"MEDIA\n{media:.1f}", "EFE3FF", "6A1B9A"),
+        ("E4:F6", f"CONCLUIDOS\n{concluidos}", "EAF7EA", "2E7D32"),
+        ("G4:H6", f"PENDENTES\n{pendentes}", "FDECEA", "C62828"),
     ]
     for rng, text, bg, fg in cards:
         _merge_title(ws, rng, text, bg, fg, 14)
 
-    _merge_title(ws, "A8:H8", "DISTRIBUIÃ‡ÃƒO POR CLASSIFICAÃ‡ÃƒO", "7030A0")
-    for idx, title in enumerate(["ClassificaÃ§Ã£o", "Qtd", "%", "Progresso"], 1):
+    _merge_title(ws, "A8:H8", "DISTRIBUICAO POR CLASSIFICACAO", "7030A0")
+    for idx, title in enumerate(["Classificacao", "Qtd", "%", "Progresso"], 1):
         c = ws.cell(9, idx, title)
         c.fill = _fill("1F4E79")
         c.font = _font(bold=True, color="FFFFFF")
@@ -445,15 +484,15 @@ def _build_summary_sheet(ws, cols: dict, patients: list[dict], code: str):
         c.border = _border()
 
     class_palette = {
-        "Ã“timo": ("EAF7EA", "2E7D32"),
+        "Otimo": ("EAF7EA", "2E7D32"),
         "Bom": ("FFFBE6", "9E7D00"),
         "Suficiente": ("FFF4E5", "EF6C00"),
         "Regular": ("FDECEA", "C62828"),
     }
-    for row, cls in enumerate(["Ã“timo", "Bom", "Suficiente", "Regular"], 10):
+    for row, cls in enumerate(["Otimo", "Bom", "Suficiente", "Regular"], 10):
         qty = class_counts.get(cls, 0)
         pct = qty / total if total else 0
-        bar = "â–ˆ" * round(pct * 20) + "â–‘" * (20 - round(pct * 20))
+        bar = "#" * round(pct * 20) + "." * (20 - round(pct * 20))
         bg, fg = class_palette[cls]
         vals = [cls, qty, pct, bar]
         for col, val in enumerate(vals, 1):
@@ -469,22 +508,28 @@ def _build_summary_sheet(ws, cols: dict, patients: list[dict], code: str):
         ws.cell(row, 3).number_format = "0.0%"
 
     start_row = 16
-    _merge_title(ws, f"A{start_row}:H{start_row}", "ADESÃƒO POR CRITÃ‰RIO", "375623")
+    _merge_title(ws, f"A{start_row}:H{start_row}", "ADESAO POR CRITERIO", "375623")
     hdr_row = start_row + 1
-    for idx, title in enumerate(["CritÃ©rio", "SIM", "NÃƒO/PEND", "%", "Progresso"], 1):
+    for idx, title in enumerate(["Criterio", "SIM", "NAO/PEND", "%", "Progresso"], 1):
         c = ws.cell(hdr_row, idx, title)
         c.fill = _fill("375623")
         c.font = _font(bold=True, color="FFFFFF")
         c.alignment = _align("center")
         c.border = _border()
 
-    for row, (_letter, title, crit_col) in enumerate(cols["criterios"], hdr_row + 1):
+    for crit_idx, (_letter, title, _crit_col) in enumerate(cols["criterios"]):
+        row = hdr_row + 1 + crit_idx
         descr = title.split("-", 1)[1].strip() if "-" in title else title
-        sim = sum(1 for p in patients if _normalize_status(load_workbook if False else None) is None)
-        sim = sum(1 for p in patients if _normalize_status(p["statuses"][cols["criterios"].index((_letter, title, crit_col))]) == "SIM")
+        sim = sum(
+            1
+            for p in patients
+            if crit_idx < len(p.get("statuses", []))
+            and _normalize_status(p["statuses"][crit_idx]) == "SIM"
+        )
         nao = total - sim
         pct = sim / total if total else 0
-        bar = "â–ˆ" * round(pct * 20) + "â–‘" * (20 - round(pct * 20))
+        done = int(round(pct * 20))
+        bar = "#" * done + "." * (20 - done)
         vals = [descr, sim, nao, pct, bar]
         fills = ["E8F5E9", "C6EFCE", "FFC7CE", "F2F2F2", "F2F2F2"]
         colors = ["000000", "2E7D32", "C62828", "000000", "2E7D32"]
@@ -510,26 +555,24 @@ def _build_stats_sheet(ws, cols: dict, patients: list[dict], code: str):
     ws.sheet_view.showGridLines = False
 
     total = len(patients)
-    concluidos = sum(1 for p in patients if "CONCL" in str(p.get("prio", "")).upper())
+    concluidos = sum(1 for p in patients if _norm_prio_text(p.get("prio", "")) == "CONCLUIDO")
     busca_ativa = total - concluidos
     media = (sum(float(p.get("pts", 0) or 0) for p in patients) / total) if total else 0.0
 
-    prios = ["🔴 URGENTE", "🟠 ALTA", "🟡 MONITORAR", "🟢 CONCLUÍDO"]
+    prios = ["URGENTE", "ALTA", "MONITORAR", "CONCLUIDO"]
     prio_counts = {k: 0 for k in prios}
     for p in patients:
-        pv = str(p.get("prio", "") or "")
-        for k in prios:
-            if k.split(" ", 1)[1] in pv:
-                prio_counts[k] += 1
-                break
+        pv = _norm_prio_text(p.get("prio", ""))
+        if pv in prio_counts:
+            prio_counts[pv] += 1
 
-    class_names = ["Ótimo", "Bom", "Suficiente", "Regular"]
+    class_names = ["Otimo", "Bom", "Suficiente", "Regular"]
     class_counts = {k: 0 for k in class_names}
     for p in patients:
         txt = str(p.get("classif", "") or "")
         norm = unicodedata.normalize("NFKD", txt).encode("ascii", "ignore").decode("ascii").lower()
         if "otimo" in norm:
-            class_counts["Ótimo"] += 1
+            class_counts["Otimo"] += 1
         elif "bom" in norm:
             class_counts["Bom"] += 1
         elif "suficiente" in norm:
@@ -537,7 +580,7 @@ def _build_stats_sheet(ws, cols: dict, patients: list[dict], code: str):
         elif "regular" in norm:
             class_counts["Regular"] += 1
 
-    _merge_title(ws, "A1:J1", f"📈 ESTATÍSTICAS — {code}", "1F4E79", size=13)
+    _merge_title(ws, "A1:J1", f"ESTATISTICAS - {code}", "1F4E79", size=13)
     ws.merge_cells("A2:J2")
     ws["A2"] = f"Atualizado automaticamente em {datetime.now().strftime('%d/%m/%Y %H:%M')}"
     ws["A2"].fill = AZUL
@@ -546,9 +589,9 @@ def _build_stats_sheet(ws, cols: dict, patients: list[dict], code: str):
 
     cards = [
         ("A4:C6", f"TOTAL\n{total}", "D9EAF7", "1F4E79"),
-        ("D4:F6", f"MÉDIA\n{media:.1f}", "EFE3FF", "6A1B9A"),
+        ("D4:F6", f"MEDIA\n{media:.1f}", "EFE3FF", "6A1B9A"),
         ("G4:H6", f"BUSCA ATIVA\n{busca_ativa}", "FDECEA", "C62828"),
-        ("I4:J6", f"CONCLUÍDOS\n{concluidos}", "EAF7EA", "2E7D32"),
+        ("I4:J6", f"CONCLUIDOS\n{concluidos}", "EAF7EA", "2E7D32"),
     ]
     for rng, txt, bg, fg in cards:
         _merge_title(ws, rng, txt, bg, fg, 12)
@@ -571,8 +614,8 @@ def _build_stats_sheet(ws, cols: dict, patients: list[dict], code: str):
             c.fill = _fill("F7FAFD")
         ws.cell(ridx, 3).number_format = "0.0%"
 
-    _merge_title(ws, "F8:J8", "CLASSIFICAÇÃO", "7030A0")
-    for cidx, title in enumerate(["Classificação", "Qtd", "%"], 6):
+    _merge_title(ws, "F8:J8", "CLASSIFICACAO", "7030A0")
+    for cidx, title in enumerate(["Classificacao", "Qtd", "%"], 6):
         c = ws.cell(9, cidx, title)
         c.fill = _fill("DCC8F0")
         c.font = _font(bold=True, color="4A148C")
@@ -590,8 +633,8 @@ def _build_stats_sheet(ws, cols: dict, patients: list[dict], code: str):
         ws.cell(ridx, 8).number_format = "0.0%"
 
     start = 16
-    _merge_title(ws, f"A{start}:J{start}", "ADESÃO POR CRITÉRIO", "375623")
-    headers = ["Critério", "SIM", "NÃO/PEND", "% SIM", "Barra"]
+    _merge_title(ws, f"A{start}:J{start}", "ADESAO POR CRITERIO", "375623")
+    headers = ["Criterio", "SIM", "NAO/PEND", "% SIM", "Barra"]
     for cidx, title in enumerate(headers, 1):
         c = ws.cell(start + 1, cidx, title)
         c.fill = _fill("E2EFDA")
@@ -633,13 +676,13 @@ def _refresh_derived_tabs(wb, ws_data, header_row: int, cols: dict) -> tuple[dic
 
     ws_search = next((wb[n] for n in wb.sheetnames if n.startswith("🔍") or n.startswith("ðŸ”") or n.startswith("Busca")), None)
     if ws_search is None:
-        ws_search = wb.create_sheet("🔍 Busca Ativa")
+        ws_search = wb.create_sheet("Busca Ativa")
     ws_summary = next((wb[n] for n in wb.sheetnames if n.startswith("📊") or n.startswith("ðŸ“Š") or n.startswith("Resumo")), None)
     if ws_summary is None:
-        ws_summary = wb.create_sheet("📊 Resumo")
+        ws_summary = wb.create_sheet("Resumo")
     ws_stats = next((wb[n] for n in wb.sheetnames if n.startswith("📈") or n.startswith("ðŸ“ˆ") or n.startswith("Estat")), None)
     if ws_stats is None:
-        ws_stats = wb.create_sheet("📈 Estatísticas")
+        ws_stats = wb.create_sheet("Estatisticas")
 
     _build_search_sheet(ws_search, cols, patients)
     _build_summary_sheet(ws_summary, cols, patients, code)
@@ -1093,6 +1136,14 @@ class EditorPlanilhaApp(tk.Toplevel):
     def _record_from_unified_row(self, idx: int, row) -> dict:
         bairro = self._row_value(row, "Bairro", "Microárea", "MicroÃ¡rea", "Microarea")
         endereco = self._row_value(row, "Endereco", "Endereço", "EndereÃ§o", "Logradouro")
+        phone_values = []
+        for col in row.index:
+            title = str(col or "")
+            norm = _norm_header_text(title)
+            if any(k in norm for k in ("telefone", "celular", "contato", "whatsapp")):
+                val = row.get(col, "")
+                if val is not None:
+                    phone_values.append(val)
         ind_scores: dict[str, str] = {}
         for col in row.index:
             col_s = str(col).strip()
@@ -1109,7 +1160,7 @@ class EditorPlanilhaApp(tk.Toplevel):
             "microarea": self._row_value(row, "Microárea", "MicroÃ¡rea", "Microarea"),
             "endereco": endereco,
             "endereco_full": endereco,
-            "tel": self._row_value(row, "Telefone"),
+            "tel": _merge_phones(*phone_values) or self._row_value(row, "Telefone", "Telefone 1", "Telefone 2", "Telefone 3"),
             "indicadores": self._row_value(row, "Indicadores"),
             "qtd": self._row_value(row, "Qtd"),
             "pend": self._row_value(row, "Pendências", "PendÃªncias"),
@@ -1332,7 +1383,7 @@ class EditorPlanilhaApp(tk.Toplevel):
                 for rec in rec_list:
                     ind = dict(rec.get("ind_scores", {}))
                     if info is None:
-                        ind[code] = "â€”"
+                        ind[code] = "-"
                         oqf, pend_count = self._patch_oqf_indicator(rec.get("oqf", ""), code, "")
                     else:
                         ind[code] = f"{int(round(info.get('pts', 0), 0))} pts"
@@ -1350,7 +1401,7 @@ class EditorPlanilhaApp(tk.Toplevel):
                     cnt = 0
                     for ckey, v in ind.items():
                         txt = str(v or "").strip()
-                        if txt and txt not in {"â€”", "-", "—"}:
+                        if txt and txt not in {"-", "—"}:
                             present.append(ckey)
                             n = self._to_num(txt)
                             total += n
@@ -1358,7 +1409,7 @@ class EditorPlanilhaApp(tk.Toplevel):
                     media = int(round(total / cnt, 0)) if cnt else 0
                     rec["media"] = str(media)
                     rec["prio"] = self._prio_from_media(media)
-                    rec["indicadores"] = " Â· ".join(sorted(present)) if present else "â€”"
+                    rec["indicadores"] = " · ".join(sorted(present)) if present else "-"
                     rec["qtd"] = str(len(present))
                     rec["oqf"] = oqf
                     rec["pend"] = str(pend_count)
