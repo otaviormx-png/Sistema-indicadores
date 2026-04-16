@@ -1253,7 +1253,7 @@ class EditorPlanilhaApp(tk.Toplevel):
                 result = worker()
                 self.after(0, lambda: on_ok(result))
             except Exception as exc:
-                self.after(0, lambda: on_err(exc))
+                self.after(0, lambda e=exc: on_err(e))
 
         threading.Thread(target=runner, daemon=True).start()
 
@@ -1375,7 +1375,7 @@ class EditorPlanilhaApp(tk.Toplevel):
                 result = worker()
                 self.after(0, lambda: on_ok(result))
             except Exception as exc:
-                self.after(0, lambda: on_err(exc))
+                self.after(0, lambda e=exc: on_err(e))
 
         threading.Thread(target=runner, daemon=True).start()
 
@@ -1582,7 +1582,7 @@ class EditorPlanilhaApp(tk.Toplevel):
                 result = work()
                 self.after(0, lambda: done_ok(result))
             except Exception as exc:
-                self.after(0, lambda: done_err(exc))
+                self.after(0, lambda e=exc: done_err(e))
 
         threading.Thread(target=runner, daemon=True).start()
 
@@ -2054,7 +2054,7 @@ class EditorPlanilhaApp(tk.Toplevel):
                 result = worker()
                 self.after(0, lambda: on_ok(result))
             except Exception as exc:
-                self.after(0, lambda: on_err(exc))
+                self.after(0, lambda e=exc: on_err(e))
 
         threading.Thread(target=runner, daemon=True).start()
 

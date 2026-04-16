@@ -461,7 +461,7 @@ class APSInterface(tk.Tk):
                 self.after(0, lambda: self._finish_ok(results))
             except Exception as exc:
                 tb = traceback.format_exc()
-                self.after(0, lambda: self._finish_error(exc, tb))
+                self.after(0, lambda e=exc, t=tb: self._finish_error(e, t))
 
         threading.Thread(target=worker, daemon=True).start()
 
