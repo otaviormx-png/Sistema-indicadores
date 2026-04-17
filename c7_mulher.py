@@ -19,8 +19,28 @@ from aps_utils import (
 )
 
 
+def _idade_por_nascimento(raw) -> int:
+    try:
+        dt = pd.to_datetime(raw, errors="coerce", dayfirst=True)
+    except Exception:
+        return -1
+    if pd.isna(dt):
+        return -1
+    hoje = pd.Timestamp.today().normalize()
+    anos = int(hoje.year - dt.year - ((hoje.month, hoje.day) < (dt.month, dt.day)))
+    return anos if 0 <= anos <= 120 else -1
+
+
 def _idade(base: dict) -> int:
-    return age_years(base.get("Idade"), -1)
+    idade_raw = base.get("Idade")
+    idade_txt = str(idade_raw or "").strip()
+    idade_col = age_years(idade_raw, -1)
+    idade_nasc = _idade_por_nascimento(base.get("Data de nascimento"))
+
+    # Quando "Idade" vem inconsistente (ou em formato de data), usa nascimento.
+    if idade_nasc >= 0 and (idade_col < 0 or "/" in idade_txt or "-" in idade_txt or not (0 <= idade_col <= 120)):
+        return idade_nasc
+    return idade_col
 
 
 def _faixa(base: dict, minimo: int, maximo: int) -> bool:

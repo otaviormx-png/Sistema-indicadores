@@ -110,6 +110,8 @@ def _detect_columns(ws, header_row: int) -> dict:
         "nome": pick("Nome", "Paciente") or 1,
         "microarea": pick("Microárea", "MicroÃ¡rea", "Microarea") or 6,
         "bairro": pick("Bairro", "Bairro/Localidade", "Localidade", "Comunidade") or pick_contains("bairro", "localidade", "comunidade"),
+        "data_nasc": pick("Data de nascimento", "Data nascimento", "Nascimento", "Dt nascimento", "Dt Nascimento")
+        or pick_contains("data nascimento", "nascimento"),
         "endereco": pick("Endereço", "EndereÃ§o", "Endereco", "Logradouro", "Rua", "Domicilio") or pick_contains("endereco", "ender", "logradouro", "domicilio", "rua", "avenida"),
         "numero": pick("Número", "NÃºmero", "NÃºm", "Numero", "Num") or pick_contains("numero", "num"),
         "complemento": pick("Complemento", "Comp") or pick_contains("complemento", "comp"),
@@ -119,6 +121,8 @@ def _detect_columns(ws, header_row: int) -> dict:
         "tel1": pick("Telefone celular", "Telefone") or 11,
         "tel2": pick("Telefone residencial") or 12,
         "tel3": pick("Telefone de contato", "Contato") or 13,
+        "cpf": pick("CPF"),
+        "cns": pick("CNS", "Cartao SUS", "Cartão SUS"),
         "phone_cols": phone_cols,
         "pontuacao": pick("Pontuacao", "Pontuação", "PontuaÃ§Ã£o") or pick_contains("pontu"),
         "classif": pick("Classificacao", "Classificação", "ClassificaÃ§Ã£o") or pick_contains("classif"),
@@ -156,6 +160,48 @@ def _normalize_status(value) -> str:
     if txt in {"NAO", "NÃO", "NÃƒO"}:
         return "NAO"
     return txt
+
+
+def _format_date_display(value) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, datetime):
+        return value.strftime("%d/%m/%Y")
+    txt = str(value).strip()
+    if not txt:
+        return ""
+    # Handles ISO-like strings and plain dd/mm/yyyy values.
+    m = re.search(r"(\d{4})-(\d{2})-(\d{2})", txt)
+    if m:
+        return f"{m.group(3)}/{m.group(2)}/{m.group(1)}"
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", txt)
+    if m:
+        return f"{m.group(1)}/{m.group(2)}/{m.group(3)}"
+    return txt
+
+
+def _birth_to_key(value) -> str:
+    txt = _format_date_display(value)
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", txt)
+    if not m:
+        return ""
+    return f"{m.group(3)}{m.group(2)}{m.group(1)}"
+
+
+def _age_from_birth(value) -> int | None:
+    txt = _format_date_display(value)
+    m = re.search(r"(\d{2})/(\d{2})/(\d{4})", txt)
+    if not m:
+        return None
+    try:
+        bday = datetime(int(m.group(3)), int(m.group(2)), int(m.group(1)))
+    except Exception:
+        return None
+    today = datetime.now()
+    years = today.year - bday.year
+    if (today.month, today.day) < (bday.month, bday.day):
+        years -= 1
+    return max(years, 0)
 
 
 def _norm_prio_text(value: str) -> str:
@@ -290,6 +336,10 @@ def _merge_phones(*values) -> str:
         out.append(txt)
     return " | ".join(out)
 
+
+def _digits_only(value) -> str:
+    return re.sub(r"\D+", "", str(value or ""))
+
 def _patients_from_data(ws, header_row: int, cols: dict) -> list[dict]:
     pesos = _weights(cols["criterios"])
     start = header_row + 1
@@ -313,7 +363,10 @@ def _patients_from_data(ws, header_row: int, cols: dict) -> list[dict]:
         rec = {
             "row": row,
             "nome": str(nome),
+            "cpf": (ws.cell(row, cols["cpf"]).value or "") if cols.get("cpf") else "",
+            "cns": (ws.cell(row, cols["cns"]).value or "") if cols.get("cns") else "",
             "bairro": (ws.cell(row, cols["bairro"]).value or "") if cols.get("bairro") else "",
+            "dt_nasc": _format_date_display(ws.cell(row, cols["data_nasc"]).value) if cols.get("data_nasc") else "",
             "endereco": (ws.cell(row, cols["endereco"]).value or "") if cols.get("endereco") else "",
             "tel": _merge_phones(*phone_values),
             "pts": pts,
@@ -396,12 +449,17 @@ def _build_search_sheet(ws, cols: dict, patients: list[dict]):
     ws["A2"].alignment = _align("center")
 
     headers = ["Prioridade", "Nome", "Bairro", "Telefone"] + [t for _l, t, _c in criterios] + ["Pontuacao", "Classificacao", "Pendencias"]
+    crit_start = 5
+    crit_end = 4 + len(criterios)
+    score_col = crit_end + 1
+    classif_col = crit_end + 2
+    pend_col = crit_end + 3
     for c_idx, title in enumerate(headers, 1):
         cell = ws.cell(4, c_idx, title)
         if c_idx <= 4:
             cell.fill = _fill("1F4E79")
             cell.font = _font(bold=True, color="FFFFFF")
-        elif c_idx <= 4 + len(criterios):
+        elif c_idx <= crit_end:
             cell.fill = _fill("FFF4CC")
             cell.font = _font(bold=True, color="7F6000")
         else:
@@ -426,10 +484,58 @@ def _build_search_sheet(ws, cols: dict, patients: list[dict]):
             cell.alignment = _align("left" if c_idx in (2, visible_cols) else "center", wrap=(c_idx == visible_cols))
             cell.fill = _fill(bg)
             cell.font = _font(color=fg, bold=(c_idx == 1))
+            if crit_start <= c_idx <= crit_end:
+                st = _normalize_status(value)
+                if st == "SIM":
+                    cell.fill = _fill("EAF7EA")
+                    cell.font = _font(color="2E7D32", bold=True)
+                elif st == "NAO":
+                    cell.fill = _fill("FDECEA")
+                    cell.font = _font(color="C62828", bold=True)
+                else:
+                    cell.fill = _fill("FFFBE6")
+                    cell.font = _font(color="9E7D00", bold=True)
+            elif c_idx == score_col:
+                try:
+                    pts = int(float(value or 0))
+                except Exception:
+                    pts = 0
+                if pts >= 100:
+                    cell.fill = _fill("D8F5D5")
+                    cell.font = _font(color="1B5E20", bold=True)
+                elif pts >= 75:
+                    cell.fill = _fill("FFFBE6")
+                    cell.font = _font(color="9E7D00", bold=True)
+                elif pts >= 50:
+                    cell.fill = _fill("FFF4E5")
+                    cell.font = _font(color="EF6C00", bold=True)
+                else:
+                    cell.fill = _fill("FDECEA")
+                    cell.font = _font(color="C62828", bold=True)
+            elif c_idx == classif_col:
+                norm = unicodedata.normalize("NFKD", str(value or "")).encode("ascii", "ignore").decode("ascii").lower()
+                if "otimo" in norm:
+                    cell.fill = _fill("D8F5D5")
+                    cell.font = _font(color="1B5E20", bold=True)
+                elif "bom" in norm:
+                    cell.fill = _fill("FFFBE6")
+                    cell.font = _font(color="9E7D00", bold=True)
+                elif "suficiente" in norm:
+                    cell.fill = _fill("FFF4E5")
+                    cell.font = _font(color="EF6C00", bold=True)
+                elif "regular" in norm:
+                    cell.fill = _fill("FDECEA")
+                    cell.font = _font(color="C62828", bold=True)
+            elif c_idx == pend_col and str(value or "").strip():
+                cell.fill = _fill("FFF7E6")
+                cell.font = _font(color="8A6D3B")
         ws.cell(out_row, hidden_row_col, p["row"])  # linha real na aba Dados
         ws.row_dimensions[out_row].height = 20
 
-    widths = [18, 34, 12, 16] + [14] * len(criterios) + [11, 14, 46]
+    ws.row_dimensions[1].height = 24
+    ws.row_dimensions[2].height = 20
+    ws.row_dimensions[4].height = 24
+    widths = [18, 34, 14, 20] + [16] * len(criterios) + [11, 14, 52]
     for idx, width in enumerate(widths, 1):
         ws.column_dimensions[get_column_letter(idx)].width = width
     ws.column_dimensions[get_column_letter(hidden_row_col)].hidden = True
@@ -748,11 +854,14 @@ class EditorPlanilhaApp(tk.Toplevel):
         self.card_total_var = tk.StringVar(value="0")
         self.card_pend_var = tk.StringVar(value="0")
         self.card_ok_var = tk.StringVar(value="0")
+        self.card_sem_sucesso_var = tk.StringVar(value="0")
         self.card_media_var = tk.StringVar(value="0.0")
 
         self.mass_criterio_var = tk.StringVar()
         self.mass_valor_var = tk.StringVar(value="SIM")
         self.mass_scope_var = tk.StringVar(value="Selecionados")
+        self.mass_collapsed_var = tk.BooleanVar(value=True)
+        self.obs_collapsed_var = tk.BooleanVar(value=False)
         self.fast_save_var = tk.BooleanVar(value=True)
 
         self.current_row: int | None = None
@@ -773,15 +882,18 @@ class EditorPlanilhaApp(tk.Toplevel):
         self._auto_general_after_id = None
         self.pending_by_row: dict[int, dict[str, str]] = {}
         self._undo_stack: list[dict[int, dict[str, str]]] = []
-        self._chart_regions: list[tuple[int, int, int, int, str]] = []
+        self._chart_regions: list[tuple[int, int, int, int, str, str]] = []
         self._view_refresh_after_id = None
         self._general_name_index: dict[str, list[dict]] = {}
 
         self._filter_after_id = None
         self._busy = False
         self._history_path = self.workbook_path.with_name(f"{self.workbook_path.stem}_alteracoes.jsonl")
+        self._busca_state_path = self._persistent_store_dir() / "busca_operacional.json"
+        self._busca_state_by_key: dict[str, dict] = {}
         self._initial_patient_name = (initial_patient_name or "").strip()
         self.protocol("WM_DELETE_WINDOW", self._on_close)
+        self._load_busca_state()
 
         self._build()
         self.reload_data(async_mode=True)
@@ -791,6 +903,72 @@ class EditorPlanilhaApp(tk.Toplevel):
         folder = self.workbook_path.parent / "BACKUPS_EDITOR"
         folder.mkdir(parents=True, exist_ok=True)
         return folder
+
+    def _persistent_store_dir(self) -> Path:
+        base = Path(os.getenv("LOCALAPPDATA") or str(Path.home()))
+        folder = base / "APS_Suite"
+        folder.mkdir(parents=True, exist_ok=True)
+        return folder
+
+    def _patient_key(self, rec: dict) -> str:
+        cns = _digits_only(rec.get("cns", ""))
+        if len(cns) >= 15:
+            return f"cns:{cns[-15:]}"
+        cpf = _digits_only(rec.get("cpf", ""))
+        if len(cpf) >= 11:
+            return f"cpf:{cpf[-11:]}"
+        return self._patient_legacy_keys(rec)[0]
+
+    def _patient_legacy_keys(self, rec: dict) -> list[str]:
+        nome = self._name_key(rec.get("nome", ""))
+        nasc = _birth_to_key(rec.get("dt_nasc", ""))
+        bairro = _norm_header_text(rec.get("bairro", ""))
+        keys = []
+        if nasc:
+            keys.append(f"{nome}|{nasc}")
+        keys.append(f"{nome}|{bairro}")
+        return keys
+
+    def _load_busca_state(self):
+        self._busca_state_by_key = {}
+        if not self._busca_state_path.exists():
+            return
+        try:
+            raw = json.loads(self._busca_state_path.read_text(encoding="utf-8"))
+            if isinstance(raw, dict):
+                self._busca_state_by_key = raw
+        except Exception:
+            self._busca_state_by_key = {}
+
+    def _save_busca_state(self):
+        tmp = self._busca_state_path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(self._busca_state_by_key, ensure_ascii=False, indent=2), encoding="utf-8")
+        tmp.replace(self._busca_state_path)
+
+    def _apply_busca_state_to_record(self, rec: dict):
+        key = self._patient_key(rec)
+        info = self._busca_state_by_key.get(key)
+        if info is None:
+            for lk in self._patient_legacy_keys(rec):
+                info = self._busca_state_by_key.get(lk)
+                if info is not None:
+                    # Migra para a chave mais estável (CNS/CPF quando disponível).
+                    self._busca_state_by_key[key] = info
+                    break
+        if info is None:
+            info = {}
+        rec["busca_status"] = str(info.get("status", "") or "").strip().upper()
+        rec["busca_obs"] = str(info.get("obs", "") or "").strip()
+        rec["busca_data"] = str(info.get("updated_at", "") or "").strip()
+        rec["has_obs"] = bool(rec["busca_obs"])
+
+    def _selected_rows_or_current(self) -> list[int]:
+        rows = [int(x) for x in self.tree.selection()]
+        if rows:
+            return rows
+        if self.current_row is not None:
+            return [self.current_row]
+        return []
 
     def _card(self, parent, title, var, row, col, bg, fg):
         frm = tk.Frame(parent, bg=bg, bd=1, relief="solid")
@@ -806,12 +984,13 @@ class EditorPlanilhaApp(tk.Toplevel):
 
         cards = tk.Frame(top, bg="#EAF2F8")
         cards.pack(fill="x", pady=(10, 0))
-        for i in range(4):
+        for i in range(5):
             cards.columnconfigure(i, weight=1)
         self._card(cards, "Pacientes", self.card_total_var, 0, 0, "#EAF2F8", "#1F4E79")
         self._card(cards, "Pendentes", self.card_pend_var, 0, 1, "#FFF4CC", "#7F6000")
         self._card(cards, "Concluidos", self.card_ok_var, 0, 2, "#EAF7EA", "#2E7D32")
-        self._card(cards, "Media", self.card_media_var, 0, 3, "#F3E8FD", "#6A1B9A")
+        self._card(cards, "Sem sucesso", self.card_sem_sucesso_var, 0, 3, "#EEEEEE", "#4A4A4A")
+        self._card(cards, "Media", self.card_media_var, 0, 4, "#F3E8FD", "#6A1B9A")
 
         body = tk.Frame(self, bg="#EAF2F8")
         body.pack(fill="both", expand=True, padx=12, pady=(0, 12))
@@ -834,7 +1013,13 @@ class EditorPlanilhaApp(tk.Toplevel):
         cb.bind("<<ComboboxSelected>>", lambda _e: self._apply_filter())
 
         tk.Label(filters, text="Status:", bg="#EAF2F8").pack(side="left", padx=(8, 0))
-        cb_status = ttk.Combobox(filters, textvariable=self.filter_status_var, values=("Todos", "Somente pendentes", "Somente concluidos", "Risco alto"), state="readonly", width=18)
+        cb_status = ttk.Combobox(
+            filters,
+            textvariable=self.filter_status_var,
+            values=("Todos", "Somente pendentes", "Somente concluidos", "Risco alto", "Somente sem sucesso"),
+            state="readonly",
+            width=20,
+        )
         cb_status.pack(side="left", padx=(6, 0))
         cb_status.bind("<<ComboboxSelected>>", lambda _e: self._apply_filter())
 
@@ -851,14 +1036,22 @@ class EditorPlanilhaApp(tk.Toplevel):
 
         ttk.Checkbutton(filters, text="Apenas com alteracao pendente", variable=self.only_dirty_var, command=self._apply_filter).pack(side="left", padx=(8, 0))
 
-        self.tree = ttk.Treeview(body, columns=("prio", "nome", "bairro", "pts"), show="headings", selectmode="extended")
-        for key, title, width in [("prio", "Prioridade", 130), ("nome", "Nome", 280), ("bairro", "Bairro", 130), ("pts", "Pontuacao", 90)]:
+        self.tree = ttk.Treeview(body, columns=("prio", "busca", "obs", "nome", "bairro", "pts"), show="headings", selectmode="extended")
+        for key, title, width in [
+            ("prio", "Prioridade", 120),
+            ("busca", "Busca", 110),
+            ("obs", "Obs", 55),
+            ("nome", "Nome", 220),
+            ("bairro", "Bairro", 130),
+            ("pts", "Pontuacao", 90),
+        ]:
             self.tree.heading(key, text=title)
             self.tree.column(key, width=width, anchor="w" if key == "nome" else "center")
         self.tree.tag_configure("urgente", background="#FDECEA")
         self.tree.tag_configure("alta", background="#FFF4E5")
         self.tree.tag_configure("monitorar", background="#FFFBE6")
         self.tree.tag_configure("concluido", background="#EAF7EA")
+        self.tree.tag_configure("sem_sucesso", background="#E0E0E0")
         self.tree.tag_configure("dirty", foreground="#1F4E79")
         self.tree.grid(row=1, column=0, sticky="nsew", padx=(0, 8))
         self.tree.bind("<<TreeviewSelect>>", self._on_select)
@@ -878,7 +1071,7 @@ class EditorPlanilhaApp(tk.Toplevel):
         panel_window = panel_canvas.create_window((0, 0), window=panel_inner, anchor="nw")
         panel_inner.columnconfigure(1, weight=1)
         panel_inner.rowconfigure(2, weight=1)
-        panel_inner.rowconfigure(6, weight=1)
+        panel_inner.rowconfigure(7, weight=1)
 
         def _sync_panel_scroll(_ev=None):
             try:
@@ -898,18 +1091,38 @@ class EditorPlanilhaApp(tk.Toplevel):
         self.frm_criterios = tk.Frame(panel_inner, bg="#FFFFFF")
         self.frm_criterios.grid(row=2, column=0, columnspan=2, sticky="nsew", padx=12)
 
-        mass = tk.LabelFrame(panel_inner, text="Alteracao em massa", bg="#FFFFFF", fg="#1F4E79")
-        mass.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(8, 0))
-        mass.columnconfigure(1, weight=1)
-        tk.Label(mass, text="Criterio:", bg="#FFFFFF").grid(row=0, column=0, sticky="w", padx=(8, 4), pady=(8, 4))
-        self.cb_mass_criterio = ttk.Combobox(mass, textvariable=self.mass_criterio_var, state="readonly")
-        self.cb_mass_criterio.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(8, 4))
-        tk.Label(mass, text="Valor:", bg="#FFFFFF").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=(0, 8))
-        ttk.Combobox(mass, textvariable=self.mass_valor_var, values=("", "SIM", "NAO", "PENDENTE"), state="readonly", width=12).grid(row=1, column=1, sticky="w", pady=(0, 8))
-        ttk.Combobox(mass, textvariable=self.mass_scope_var, values=("Selecionados", "Filtrados", "Todos"), state="readonly", width=16).grid(row=1, column=1, sticky="e", padx=(0, 8), pady=(0, 8))
+        self.obs_box = tk.LabelFrame(panel_inner, text="Observacoes da busca ativa", bg="#FFFFFF", fg="#1F4E79")
+        self.obs_box.grid(row=3, column=0, columnspan=2, sticky="ew", padx=12, pady=(8, 0))
+        self.obs_box.columnconfigure(0, weight=1)
+        self.btn_obs_toggle = tk.Button(self.obs_box, text="", command=self.toggle_obs_section, bg="#F4F8FC", fg="#1F4E79")
+        self.btn_obs_toggle.grid(row=0, column=0, sticky="ew", padx=8, pady=(8, 6))
+        self.obs_content = tk.Frame(self.obs_box, bg="#FFFFFF")
+        self.obs_content.grid(row=1, column=0, sticky="ew")
+        self.obs_content.columnconfigure(0, weight=1)
+        self.txt_obs = tk.Text(self.obs_content, height=5, wrap="word", bg="#FFFFFF", relief="solid", borderwidth=1)
+        self.txt_obs.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=(2, 6))
+        tk.Button(self.obs_content, text="Salvar observacoes", command=self.save_obs_current).grid(row=1, column=0, sticky="w", padx=8, pady=(0, 8))
+        tk.Button(self.obs_content, text="Adicionar linha datada", command=self.append_obs_line_current).grid(row=1, column=1, sticky="e", padx=8, pady=(0, 8))
+        self._sync_obs_section()
+
+        self.mass_box = tk.LabelFrame(panel_inner, text="Alteracao em massa", bg="#FFFFFF", fg="#1F4E79")
+        self.mass_box.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=(8, 0))
+        self.mass_box.columnconfigure(1, weight=1)
+        self.btn_mass_toggle = tk.Button(self.mass_box, text="", command=self.toggle_mass_section, bg="#F4F8FC", fg="#1F4E79")
+        self.btn_mass_toggle.grid(row=0, column=0, columnspan=2, sticky="ew", padx=8, pady=(8, 6))
+        self.mass_content = tk.Frame(self.mass_box, bg="#FFFFFF")
+        self.mass_content.grid(row=1, column=0, columnspan=2, sticky="ew")
+        self.mass_content.columnconfigure(1, weight=1)
+        tk.Label(self.mass_content, text="Criterio:", bg="#FFFFFF").grid(row=0, column=0, sticky="w", padx=(8, 4), pady=(2, 4))
+        self.cb_mass_criterio = ttk.Combobox(self.mass_content, textvariable=self.mass_criterio_var, state="readonly")
+        self.cb_mass_criterio.grid(row=0, column=1, sticky="ew", padx=(0, 8), pady=(2, 4))
+        tk.Label(self.mass_content, text="Valor:", bg="#FFFFFF").grid(row=1, column=0, sticky="w", padx=(8, 4), pady=(0, 8))
+        ttk.Combobox(self.mass_content, textvariable=self.mass_valor_var, values=("", "SIM", "NAO", "PENDENTE"), state="readonly", width=12).grid(row=1, column=1, sticky="w", pady=(0, 8))
+        ttk.Combobox(self.mass_content, textvariable=self.mass_scope_var, values=("Selecionados", "Filtrados", "Todos"), state="readonly", width=16).grid(row=1, column=1, sticky="e", padx=(0, 8), pady=(0, 8))
+        self._sync_mass_section()
 
         actions = tk.Frame(panel_inner, bg="#FFFFFF")
-        actions.grid(row=4, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
+        actions.grid(row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=12)
         for col in range(4):
             actions.columnconfigure(col, weight=1)
 
@@ -922,10 +1135,12 @@ class EditorPlanilhaApp(tk.Toplevel):
         tk.Button(actions, text="Historico de mudancas", command=self.open_change_history).grid(row=1, column=1, sticky="ew", padx=4, pady=4)
         tk.Button(actions, text="Abrir planilha", command=self._open_workbook).grid(row=1, column=2, sticky="ew", padx=4, pady=4)
         tk.Button(actions, text="Atualizar planilha", command=self._manual_refresh_planilha).grid(row=1, column=3, sticky="ew", padx=4, pady=4)
+        tk.Button(actions, text="Marcar sem sucesso", command=self.mark_sem_sucesso_selected).grid(row=2, column=0, sticky="ew", padx=4, pady=4)
+        tk.Button(actions, text="Limpar sem sucesso", command=self.clear_sem_sucesso_selected).grid(row=2, column=1, sticky="ew", padx=4, pady=4)
 
-        tk.Label(panel_inner, textvariable=self.buffer_var, bg="#FFFFFF", fg="#1F4E79", anchor="w").grid(row=5, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
-        chart_box = tk.LabelFrame(panel_inner, text="Grafico ao vivo (clique para filtrar prioridade)", bg="#FFFFFF", fg="#1F4E79")
-        chart_box.grid(row=6, column=0, columnspan=2, sticky="nsew", padx=12, pady=(0, 12))
+        tk.Label(panel_inner, textvariable=self.buffer_var, bg="#FFFFFF", fg="#1F4E79", anchor="w").grid(row=6, column=0, columnspan=2, sticky="ew", padx=12, pady=(0, 12))
+        chart_box = tk.LabelFrame(panel_inner, text="Grafico ao vivo (clique para filtrar prioridade/status)", bg="#FFFFFF", fg="#1F4E79")
+        chart_box.grid(row=7, column=0, columnspan=2, sticky="nsew", padx=12, pady=(0, 12))
         chart_box.columnconfigure(0, weight=1)
         chart_box.rowconfigure(0, weight=1)
         self.chart_canvas = tk.Canvas(chart_box, bg="#FFFFFF", height=170, highlightthickness=0)
@@ -970,7 +1185,10 @@ class EditorPlanilhaApp(tk.Toplevel):
             return headers.get(name)
         return {
             "nome": _pick("Nome"),
+            "cpf": _pick("CPF"),
+            "cns": _pick("CNS") or _pick("Cartao SUS") or _pick("Cartão SUS"),
             "bairro": _pick("Bairro") or _pick("Bairro/Localidade") or _pick("Localidade"),
+            "data_nasc": _pick("Data de nascimento") or _pick("Nascimento"),
             "microarea": _pick("MicroÃ¡rea") or _pick("Microarea"),
             "endereco": _pick("EndereÃ§o") or _pick("Endereco") or _pick("Logradouro"),
             "numero": _pick("Numero") or _pick("NÃºmero") or _pick("Num"),
@@ -1044,6 +1262,7 @@ class EditorPlanilhaApp(tk.Toplevel):
     def _refresh_cards(self):
         total = len(self.records)
         concluidos = sum(1 for p in self.records if self._norm_prio(p.get("prio", "")) == "CONCLUIDO")
+        sem_sucesso = sum(1 for p in self.records if str(p.get("busca_status", "")).upper() == "SEM_SUCESSO")
         if self.unified_mode:
             medias = []
             for p in self.records:
@@ -1057,6 +1276,7 @@ class EditorPlanilhaApp(tk.Toplevel):
         self.card_total_var.set(str(total))
         self.card_ok_var.set(str(concluidos))
         self.card_pend_var.set(str(total - concluidos))
+        self.card_sem_sucesso_var.set(str(sem_sucesso))
         self.card_media_var.set(f"{media:.1f}")
         rows_dirty = len(self.pending_by_row)
         cells_dirty = sum(len(v) for v in self.pending_by_row.values())
@@ -1065,6 +1285,8 @@ class EditorPlanilhaApp(tk.Toplevel):
 
     def _build_records_view(self):
         merged = [self._effective_record(rec) for rec in self.base_records]
+        for rec in merged:
+            self._apply_busca_state_to_record(rec)
         merged.sort(key=self._sort_key_for_record)
         self.records = merged
         self.record_map = {p["row"]: p for p in merged}
@@ -1156,7 +1378,10 @@ class EditorPlanilhaApp(tk.Toplevel):
         return {
             "row": idx + 1,
             "nome": self._row_value(row, "Nome"),
+            "cpf": self._row_value(row, "CPF"),
+            "cns": self._row_value(row, "CNS", "Cartao SUS", "Cartão SUS"),
             "bairro": bairro,
+            "dt_nasc": _format_date_display(self._row_value(row, "Data de nascimento", "Data nascimento", "Nascimento")),
             "microarea": self._row_value(row, "Microárea", "MicroÃ¡rea", "Microarea"),
             "endereco": endereco,
             "endereco_full": endereco,
@@ -1669,14 +1894,19 @@ class EditorPlanilhaApp(tk.Toplevel):
                 continue
             if status == "Risco alto" and prio_norm not in {"URGENTE", "ALTA"}:
                 continue
+            if status == "Somente sem sucesso" and str(p.get("busca_status", "")).upper() != "SEM_SUCESSO":
+                continue
             if only_dirty and not p.get("dirty"):
                 continue
-            tag = {
-                "URGENTE": "urgente",
-                "ALTA": "alta",
-                "MONITORAR": "monitorar",
-                "CONCLUIDO": "concluido",
-            }.get(prio_norm, "monitorar")
+            if str(p.get("busca_status", "")).upper() == "SEM_SUCESSO":
+                tag = "sem_sucesso"
+            else:
+                tag = {
+                    "URGENTE": "urgente",
+                    "ALTA": "alta",
+                    "MONITORAR": "monitorar",
+                    "CONCLUIDO": "concluido",
+                }.get(prio_norm, "monitorar")
             tags = [tag]
             if p.get("dirty"):
                 tags.append("dirty")
@@ -1684,7 +1914,14 @@ class EditorPlanilhaApp(tk.Toplevel):
                 "",
                 "end",
                 iid=str(p["row"]),
-                values=(prio_norm, p["nome"], p.get("bairro", "") or p.get("microarea", ""), p.get("media", p.get("pts", ""))),
+                values=(
+                    prio_norm,
+                    "SEM SUCESSO" if str(p.get("busca_status", "")).upper() == "SEM_SUCESSO" else "",
+                    "SIM" if p.get("has_obs") else "--",
+                    p["nome"],
+                    p.get("bairro", "") or p.get("microarea", ""),
+                    p.get("media", p.get("pts", "")),
+                ),
                 tags=tuple(tags),
             )
         self._refresh_cards()
@@ -1714,18 +1951,27 @@ class EditorPlanilhaApp(tk.Toplevel):
         p = self.record_map[self.current_row]
         self.lbl_nome.config(text=f"Paciente: {p['nome']}")
         dirty_label = "SIM" if p.get("dirty") else "NAO"
+        dt_nasc = _format_date_display(p.get("dt_nasc", ""))
+        idade = _age_from_birth(dt_nasc)
+        idade_txt = str(idade) if idade is not None else "-"
+        busca_status = str(p.get("busca_status", "")).upper() or "-"
+        busca_data = str(p.get("busca_data", "")).strip() or "-"
         meta_text = (
             f"Bairro: {p.get('bairro', '')}\n"
+            f"Data de nascimento: {dt_nasc or '-'} | Idade: {idade_txt}\n"
             f"Endereco: {p.get('endereco_full', p.get('endereco', ''))}\n"
             f"Telefone: {p.get('tel','')}\n"
             f"Pontuacao: {p.get('pts','')}\n"
             f"Prioridade: {self._norm_prio(p.get('prio',''))}\n"
+            f"Busca ativa: {busca_status} | Ultima atualizacao: {busca_data}\n"
             f"Alteracao pendente: {dirty_label}"
         )
         self.txt_meta.configure(state="normal")
         self.txt_meta.delete("1.0", "end")
         self.txt_meta.insert("1.0", meta_text)
         self.txt_meta.configure(state="disabled")
+        self.txt_obs.delete("1.0", "end")
+        self.txt_obs.insert("1.0", str(p.get("busca_obs", "")))
         for widget in self.frm_criterios.winfo_children():
             widget.destroy()
         self.criterio_vars = {}
@@ -1890,16 +2136,21 @@ class EditorPlanilhaApp(tk.Toplevel):
         width = max(420, int(cvs.winfo_width() or 420))
         height = max(170, int(cvs.winfo_height() or 170))
         pad = 28
-        labels = ["URGENTE", "ALTA", "MONITORAR", "CONCLUIDO"]
+        labels = ["URGENTE", "ALTA", "MONITORAR", "CONCLUIDO", "SEM_SUCESSO"]
         colors = {
             "URGENTE": "#D9534F",
             "ALTA": "#F0AD4E",
             "MONITORAR": "#F7D97B",
             "CONCLUIDO": "#5CB85C",
+            "SEM_SUCESSO": "#8A8A8A",
         }
         counts = {lbl: 0 for lbl in labels}
         for rec in self.records:
-            counts[self._norm_prio(rec["prio"])] = counts.get(self._norm_prio(rec["prio"]), 0) + 1
+            prio = self._norm_prio(rec["prio"])
+            if prio in counts:
+                counts[prio] += 1
+            if str(rec.get("busca_status", "")).upper() == "SEM_SUCESSO":
+                counts["SEM_SUCESSO"] += 1
         max_count = max(max(counts.values()), 1)
         col_w = (width - pad * 2) // len(labels)
         self._chart_regions = []
@@ -1912,17 +2163,150 @@ class EditorPlanilhaApp(tk.Toplevel):
             cvs.create_rectangle(x0, y0, x1, y1, fill=colors[lbl], outline="")
             cvs.create_text((x0 + x1) // 2, y0 - 10, text=str(counts[lbl]), fill="#1F4E79", font=("Segoe UI", 9, "bold"))
             cvs.create_text((x0 + x1) // 2, y1 + 14, text=lbl, fill="#1F4E79", font=("Segoe UI", 9))
-            self._chart_regions.append((x0, y0, x1, y1, lbl))
+            region_type = "busca" if lbl == "SEM_SUCESSO" else "prio"
+            self._chart_regions.append((x0, y0, x1, y1, lbl, region_type))
 
     def _on_chart_click(self, event):
-        for x0, y0, x1, y1, lbl in self._chart_regions:
+        for x0, y0, x1, y1, lbl, region_type in self._chart_regions:
             if x0 <= event.x <= x1 and y0 <= event.y <= y1:
-                if self.filter_prio_var.get() == lbl:
-                    self.filter_prio_var.set("Todas")
+                if region_type == "busca":
+                    if self.filter_status_var.get() == "Somente sem sucesso":
+                        self.filter_status_var.set("Todos")
+                    else:
+                        self.filter_status_var.set("Somente sem sucesso")
                 else:
-                    self.filter_prio_var.set(lbl)
+                    if self.filter_prio_var.get() == lbl:
+                        self.filter_prio_var.set("Todas")
+                    else:
+                        self.filter_prio_var.set(lbl)
                 self._apply_filter()
                 return
+
+    def _sync_mass_section(self):
+        collapsed = bool(self.mass_collapsed_var.get())
+        if collapsed:
+            self.mass_content.grid_remove()
+            self.btn_mass_toggle.configure(text="Mostrar alteracao em massa")
+        else:
+            self.mass_content.grid()
+            self.btn_mass_toggle.configure(text="Ocultar alteracao em massa")
+
+    def toggle_mass_section(self):
+        self.mass_collapsed_var.set(not bool(self.mass_collapsed_var.get()))
+        self._sync_mass_section()
+
+    def _sync_obs_section(self):
+        collapsed = bool(self.obs_collapsed_var.get())
+        if collapsed:
+            self.obs_content.grid_remove()
+            self.btn_obs_toggle.configure(text="Mostrar observacoes")
+        else:
+            self.obs_content.grid()
+            self.btn_obs_toggle.configure(text="Ocultar observacoes")
+
+    def toggle_obs_section(self):
+        self.obs_collapsed_var.set(not bool(self.obs_collapsed_var.get()))
+        self._sync_obs_section()
+
+    def save_obs_current(self):
+        if self.current_row is None:
+            self.status_var.set("Selecione um paciente para salvar observacoes.")
+            return
+        rec = self.record_map.get(self.current_row)
+        if not rec:
+            return
+        key = self._patient_key(rec)
+        info = dict(self._busca_state_by_key.get(key, {}))
+        info["obs"] = self.txt_obs.get("1.0", "end").strip()
+        info["updated_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+        info["status"] = str(info.get("status", "") or "").upper()
+        self._busca_state_by_key[key] = info
+        self._save_busca_state()
+        self._append_history({"action": "busca_obs_save", "row": self.current_row, "paciente": str(rec.get("nome", ""))})
+        self._build_records_view()
+        self._apply_filter()
+        if self.tree.exists(str(self.current_row)):
+            self.tree.selection_set(str(self.current_row))
+            self.tree.focus(str(self.current_row))
+            self._on_select()
+        self.status_var.set("Observacoes salvas.")
+
+    def append_obs_line_current(self):
+        if self.current_row is None:
+            self.status_var.set("Selecione um paciente para adicionar observacao.")
+            return
+        now = datetime.now().strftime("%d/%m/%Y %H:%M")
+        line = f"[{now}] "
+        current = self.txt_obs.get("1.0", "end").strip()
+        if current:
+            self.txt_obs.insert("end", ("\n" if not current.endswith("\n") else "") + line)
+        else:
+            self.txt_obs.insert("1.0", line)
+        self.txt_obs.see("end")
+
+    def mark_sem_sucesso_selected(self):
+        rows = self._selected_rows_or_current()
+        if not rows:
+            self.status_var.set("Selecione ao menos um paciente.")
+            return
+        changed = 0
+        now = datetime.now().strftime("%d/%m/%Y %H:%M")
+        for row in rows:
+            rec = self.record_map.get(row)
+            if not rec:
+                continue
+            key = self._patient_key(rec)
+            before = str(self._busca_state_by_key.get(key, {}).get("status", "")).upper()
+            old_obs = str(self._busca_state_by_key.get(key, {}).get("obs", "") or "").strip()
+            note = f"[{now}] Busca ativa sem sucesso."
+            if old_obs:
+                merged_obs = f"{old_obs}\n{note}"
+            else:
+                merged_obs = note
+            self._busca_state_by_key[key] = {
+                "status": "SEM_SUCESSO",
+                "updated_at": now,
+                "obs": merged_obs,
+            }
+            if before != "SEM_SUCESSO":
+                changed += 1
+        if not changed:
+            self.status_var.set("Nenhuma mudanca: pacientes ja estavam como sem sucesso.")
+            return
+        self._save_busca_state()
+        self._append_history({"action": "busca_sem_sucesso", "rows": len(rows), "changed": changed})
+        self._build_records_view()
+        self._apply_filter()
+        self.status_var.set(f"Sem sucesso aplicado em {changed} paciente(s).")
+
+    def clear_sem_sucesso_selected(self):
+        rows = self._selected_rows_or_current()
+        if not rows:
+            self.status_var.set("Selecione ao menos um paciente.")
+            return
+        changed = 0
+        for row in rows:
+            rec = self.record_map.get(row)
+            if not rec:
+                continue
+            key = self._patient_key(rec)
+            info = self._busca_state_by_key.get(key)
+            if not info:
+                continue
+            if str(info.get("status", "")).upper() != "SEM_SUCESSO":
+                continue
+            info["status"] = ""
+            info["updated_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+            self._busca_state_by_key[key] = info
+            changed += 1
+        if not changed:
+            self.status_var.set("Nenhum paciente marcado como sem sucesso para limpar.")
+            return
+        self._save_busca_state()
+        self._append_history({"action": "busca_limpar_sem_sucesso", "rows": len(rows), "changed": changed})
+        self._build_records_view()
+        self._apply_filter()
+        self.status_var.set(f"Sem sucesso removido de {changed} paciente(s).")
 
     def _stage_row_changes(
         self,
